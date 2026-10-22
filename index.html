@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Iron Ledger</title>
+<meta name="description" content="A lifting log with a coach that watches your volume, recovery and joints.">
+<meta name="theme-color" content="#f3f4f2" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#111416" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Iron Ledger">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;800&family=Public+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="src/styles.css">
+<style>
+body { margin: 0; padding-top: env(safe-area-inset-top, 0px); }
+[hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand"><span class="plate" aria-hidden="true"></span><h1>Iron Ledger</h1></div>
+    <div class="unit-toggle" role="group" aria-label="Units">
+      <button id="u-lb" type="button" aria-pressed="true">lb</button>
+      <button id="u-kg" type="button" aria-pressed="false">kg</button>
+    </div>
+  </header>
+  <div id="banner"></div>
+  <main id="view"></main>
+</div>
+<nav class="tabs" aria-label="Sections"><div class="in" role="tablist">
+  <button role="tab" id="tab-today" aria-selected="true">Today</button>
+  <button role="tab" id="tab-progress" aria-selected="false">Progress</button>
+  <button role="tab" id="tab-library" aria-selected="false">Library</button>
+</div></nav>
+<div id="sheet"></div>
+<div id="help"></div>
+<div id="toast" class="toast" hidden></div>
+<script src="src/store.js"></script>
+<script src="src/app.js"></script>
+<script>
+if ("serviceWorker" in navigator && location.protocol !== "file:") navigator.serviceWorker.register("sw.js").catch(() => {});
+</script>
+</body>
+</html>

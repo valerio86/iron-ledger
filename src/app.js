@@ -623,7 +623,7 @@ async function boot() {
   startConnectors();
   if (!db) { S.mode = "demo"; loadDemo(); render(); return; }
   DB = db; S.mode = "live";
-  let pending = 5;
+  let pending = 6;
   const ready = () => { if (pending > 0 && --pending === 0) render(); else if (pending <= 0) render(); };
   db.collection("sessions").onSnapshot(snap => {
     for (const ch of snap.docChanges()) {
@@ -636,6 +636,7 @@ async function boot() {
   }, onDbErr);
   db.collection("exercises").onSnapshot(snap => { S.custom = {}; snap.docs.forEach(d => S.custom[d.id] = { ...structuredClone(d.data()), id: d.id }); ready(); }, onDbErr);
   db.collection("routines").onSnapshot(snap => { S.routines = {}; snap.docs.forEach(d => S.routines[d.id] = { ...structuredClone(d.data()), id: d.id }); ready(); }, onDbErr);
+  db.collection("connectors").onSnapshot(snap => { S.connectors = {}; snap.docs.forEach(d => S.connectors[d.id] = d.data()); applyConnectors(); ready(); }, onDbErr);
   db.collection("body").onSnapshot(snap => { S.body = {}; snap.docs.forEach(d => S.body[d.id] = structuredClone(d.data())); rebuildDerived(); ready(); }, onDbErr);
   db.doc("settings/main").onSnapshot(d => { if (d.exists) S.settings = { unit: "lb", ...d.data() }; ready(); }, onDbErr);
 }
@@ -657,7 +658,7 @@ function connError(key, server, e) {
 }
 async function startConnectors() {
   MCP = null;   // Strava comes back via its own OAuth; Garmin has no public API for individual apps
-  if (!MCP) { S.conn.strava = { st: "soon", msg: "Coming soon." }; S.conn.garmin = { st: "soon", msg: "Not available yet." }; return; }
+  if (!MCP) { S.conn.strava = { st: "soon", msg: "Coming soon." }; applyConnectors(); return; }
   // Strava: last 6 weeks of activities, refreshed every 30 min
   S.conn.strava = { st: "loading" };
   const since = new Date(Date.now() - 42 * 864e5);
@@ -1803,11 +1804,12 @@ function renderLibrary() {
     <section class="block">
       <h2>Connections</h2>
       <div class="list">
-        ${[["strava", "Strava", "Runs, rides and rows add fatigue to the muscles they use."], ["garmin", "Garmin (via Google Drive)", "Readiness, sleep, HRV, Body Battery, weight and body fat."]].map(([k, n, d]) => { const c = S.conn[k];
+        ${[["strava", "Strava", "Runs, rides and rows add fatigue to the muscles they use."], ["garmin", "Garmin", "Readiness, sleep, HRV, Body Battery, weight and body fat."]].map(([k, n, d]) => { const c = S.conn[k];
           const pill = c.st === "ok" ? `<span class="pill good">${c.n} ${k === "strava" ? "activities" : "days"}</span>` : c.st === "loading" ? `<span class="pill neutral">Loading</span>` : c.st === "off" ? `<span class="pill neutral">Not started</span>` : c.st === "soon" ? `<span class="pill neutral">Later</span>` : `<span class="pill ${c.st === "missing" ? "warn" : "bad"}">${c.st === "missing" ? "Waiting" : "Not connected"}</span>`;
           return `<div class="row"><div class="l"><b>${n}</b><div class="small muted">${c.msg ? esc(c.msg) : d}</div></div>${pill}</div>`; }).join("")}
       </div>
       ${S.conn.garmin.st !== "ok" && MCP ? `<div class="actions" style="margin-top:0"><button class="btn" data-act="retryhealth">Look for the Garmin file again</button></div>` : ""}
+      ${renderConnectorKey()}
     </section>
     ${renderAccount()}
     <section class="block">
@@ -2044,7 +2046,7 @@ document.addEventListener("click", async ev => {
     }
     case "cxm": { const m = b.dataset.m; const w = draft.muscles[m] || 0; const nw = w === 0 ? 1 : w === 1 ? .5 : 0; if (nw) draft.muscles[m] = nw; else delete draft.muscles[m]; b.dataset.w = String(nw); break; }
     case "export": {
-      const data = JSON.stringify({ app: "iron-ledger", version: 1, exported: new Date().toISOString(), unitStored: "lb", docs: DB ? DB.dump() : {} }, null, 1);
+      const data = JSON.stringify({ app: "iron-ledger", version: 1, exported: new Date().toISOString(), unitStored: "lb", docs: Object.fromEntries(Object.entries(DB ? DB.dump() : {}).filter(([k]) => !k.startsWith("connectors/"))) }, null, 1);
       const a = document.createElement("a");
       a.href = URL.createObjectURL(new Blob([data], { type: "application/json" }));
       a.download = `iron-ledger-${dayKey(new Date())}.json`; a.click();

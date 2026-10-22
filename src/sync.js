@@ -86,6 +86,8 @@ async function start() {
     signIn: (email, pw) => A.signInWithEmailAndPassword(auth, email, pw).catch(e => { throw friendly(e); }),
     signUp: (email, pw) => A.createUserWithEmailAndPassword(auth, email, pw).catch(e => { throw friendly(e); }),
     reset: email => A.sendPasswordResetEmail(auth, email).catch(e => { throw friendly(e); }),
+    // For a script on the user's computer: it trades the refresh token for short-lived ID tokens and writes via REST
+    connectorKey: () => ({ apiKey: config.apiKey, projectId: config.projectId, uid, refreshToken: auth.currentUser.refreshToken }),
     // Signing out removes the log from this device; it stays in the account
     async signOut() { unsub?.(); unsub = null; live = false; await A.signOut(auth); await store.wipe(); },
     async deleteAccount() {

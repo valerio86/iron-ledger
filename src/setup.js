@@ -258,3 +258,32 @@ document.addEventListener("click", async ev => {
       break;
   }
 });
+
+/* ============================== Script connectors ============================== */
+// A script on your own computer (e.g. iron-ledger-sync/garmin_pull.py) writes connectors/<name> into your account:
+// { source, updated, days: { "YYYY-MM-DD": { readiness, sleepScore, hrv, weightLb, ... } } }. Same shape as the Drive file.
+S.connectors = {};
+function applyConnectors() {
+  const g = S.connectors.garmin;
+  if (g?.days) {
+    S.extHealth = g.days; rebuildDerived();
+    S.conn.garmin = { st: "ok", at: Date.parse(g.updated) || Date.now(), n: Object.keys(g.days).length, msg: `Updated ${new Date(Date.parse(g.updated)).toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" })} by your sync script.` };
+  } else {
+    S.extHealth = {}; rebuildDerived();
+    S.conn.garmin = { st: "soon", msg: "Needs a sync script on your computer, and an account (see Connect a script)." };
+  }
+}
+function renderConnectorKey() {
+  if (!window.Sync?.state.user) return "";
+  return `<details class="fold" style="margin-top:4px"><summary>Connect a script (advanced)</summary>
+    <div style="display:grid;gap:8px;margin-top:8px">
+      <p class="small muted" style="margin:0">For a sync script on your own computer, like the Garmin one. The key lets the script write to your log as you, so keep it on your computer and never share it. Signing out doesn't cancel it.</p>
+      <div class="actions" style="margin-top:0"><button class="btn" data-act="ac-key">Copy connector key</button></div>
+      <p class="small muted" style="margin:0">Then in Terminal on your Mac: <code class="mono">pbpaste &gt; ~/.iron-ledger-key &amp;&amp; chmod 600 ~/.iron-ledger-key</code></p>
+    </div></details>`;
+}
+document.addEventListener("click", async ev => {
+  const b = ev.target.closest("[data-act=ac-key]"); if (!b) return;
+  try { await navigator.clipboard.writeText(JSON.stringify(await Sync.connectorKey())); toast("Key copied. Paste it into the file, then clear your clipboard."); }
+  catch { toast("Couldn't copy. Try again."); }
+});

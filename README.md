@@ -28,7 +28,7 @@ No build step. Serve the folder and open it: `python3 -m http.server 8765`, then
 - `src/store.js`: on-device store (IndexedDB) with a Firestore-like API, per-doc sync bookkeeping, `dump`/`restore` for backups
 - `src/sync.js`: optional account + sync (Firebase Auth + Firestore, loaded from gstatic). Config in `src/firebase-config.js` (public by design), rules in `firestore.rules`
 - `sw.js`: offline cache (network first). Bump `VERSION` when the SHELL list changes
-- `tools/make_icons.py`: rebuilds the PNG icons
+- `tools/icon-art.svg` + `tools/make_icons.sh`: the kettlebell icon; the script rebuilds every size (needs Chrome)
 
 **Sync model.** The device is the source of truth. Each change is pushed to `users/{uid}/docs/{path}` as `{p, d (JSON string), at, del, sat}`; other devices pull docs with a newer server timestamp. The newer edit wins per doc. Signing out wipes the device copy.
 

@@ -1754,10 +1754,15 @@ function wireChart() {
     barChart(c3, { pts, label: "min" }); }
   for (const [id, cfg] of S._bodyCharts || []) { const el = document.getElementById(id); if (el) lineChart(el, cfg); }
 }
+// The smallest round step that covers lo..hi in at most n+1 intervals, with the top rounded up so no value sits above the chart
 function niceTicks(lo, hi, n = 4) {
-  const span = hi - lo || 1, step0 = span / n, mag = Math.pow(10, Math.floor(Math.log10(step0)));
-  const step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(s => s >= step0);
-  const out = []; for (let v = Math.floor(lo / step) * step; v <= hi + 1e-9; v += step) out.push(+v.toFixed(6));
+  const span = hi - lo || 1, mag = Math.pow(10, Math.floor(Math.log10(span / n)));
+  const steps = [1, 2, 2.5, 5, 10, 20, 25, 50].map(m => m * mag);
+  const fit = st => [Math.floor(lo / st + 1e-9) * st, Math.ceil(hi / st - 1e-9) * st];
+  const step = steps.find(st => { const [b, t] = fit(st); return (t - b) / st <= n + 1 + 1e-9; }) || steps[steps.length - 1];
+  const [b, t] = fit(step);
+  const out = []; for (let v = b; v <= t + 1e-9; v += step) out.push(+v.toFixed(6));
+  if (out.length < 2) out.push(+(b + step).toFixed(6));
   return out;
 }
 function lineChart(el, { pts, fmt, unit: u }) {
@@ -1771,7 +1776,9 @@ function lineChart(el, { pts, fmt, unit: u }) {
   const xy = pts.map(p => [X(parseDay(p.day).getTime()), Y(p.v)]);
   const line = xy.map((p, i) => `${i ? "L" : "M"}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join("");
   const area = `${line}L${xy[xy.length - 1][0].toFixed(1)},${H - B}L${xy[0][0].toFixed(1)},${H - B}Z`;
-  const xl = [0, Math.floor((pts.length - 1) / 2), pts.length - 1].filter((v, i, a) => a.indexOf(v) === i);
+  // first, middle and last dates; the middle one only when it has room (dates bunched at one end would overlap)
+  const xl = [0, Math.floor((pts.length - 1) / 2), pts.length - 1].filter((v, i, a) => a.indexOf(v) === i)
+    .filter((v, i, a) => i === 0 || i === a.length - 1 || (xy[v][0] - xy[a[0]][0] > 70 && xy[a[a.length - 1]][0] - xy[v][0] > 70));
   const last = xy[xy.length - 1];
   el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Trend chart">
     ${ticks.map(t => `<line x1="${L}" x2="${W - R}" y1="${Y(t)}" y2="${Y(t)}" stroke="var(--line)" stroke-width="1"/><text x="${L - 6}" y="${Y(t) + 3}" text-anchor="end">${fmt(t)}</text>`).join("")}

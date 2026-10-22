@@ -303,3 +303,16 @@ form.custom input[type=text], form.custom select { width: 100%; border: 1px soli
 .re-range input { width: 56px; height: 38px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); text-align: center; font-family: var(--font-data); font-size: 15px; }
 .sheet .sf { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 16px 14px; border-top: 1px solid var(--line); }
 .sheet .sf .btn { flex: 1; }
+
+/* Last-time line, first-run tips, week summary */
+.lastline { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
+.lastline .num { font-family: var(--font-data); }
+.ftip { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: start; background: var(--accent-soft); color: var(--fg); border-radius: var(--r); padding: 10px 12px; font-size: 14px; line-height: 1.45; margin-bottom: 12px; }
+.ftip .linkbtn { white-space: nowrap; }
+.weeksum { display: grid; gap: 10px; margin-top: 8px; }
+.wmeters { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.wm { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; display: grid; gap: 4px; background: var(--surface); }
+.wm .num { font-family: var(--font-data); font-size: 14px; color: var(--muted); }
+.wm .num b { color: var(--fg); font-size: 18px; }
+.wbar { height: 4px; border-radius: 2px; background: var(--sunk); overflow: hidden; }
+.wbar i { display: block; height: 100%; background: var(--accent); }

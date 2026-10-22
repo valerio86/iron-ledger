@@ -1303,6 +1303,13 @@ function render() {
   if (S.tab === "plan") drawLinks();
 }
 
+// First-run tips: each shows once, in context, until "Got it" (kept in settings so it syncs)
+const TIPS = {
+  plan: "This is today's suggestion. The coach picks lift, cardio or rest from your last 7 days and how recovered you are. Tap <b>Start</b> to load the sets, or pick something else below.",
+  tick: "Set the weight and reps, then tap <b>✓</b> when the set is done. Only ticked sets count toward your progress and the coach's advice.",
+  coach: "The coach's notes fold up here while you train: weekly gaps, new bests and things to watch. Anything serious stays open on its own.",
+};
+const tip = k => (S.settings.tipsSeen || []).includes(k) ? "" : `<div class="ftip" role="note"><div>${TIPS[k]}</div><button class="linkbtn" data-act="tipok" data-k="${k}">Got it</button></div>`;
 // A details element whose open state survives re-renders (S.open, keyed by id)
 const fold = (id, summary, body, cls = "") => `<details class="fold ${cls}" id="${id}" ${S.open[id] ? "open" : ""}><summary>${summary}</summary>${body}</details>`;
 const MSG_RANK = { bad: 0, warn: 1, good: 2, info: 3 };
@@ -1385,7 +1392,7 @@ function renderToday() {
       ${other.length ? `<div class="label">Or do this instead</div><div class="suggest">${other.join("")}</div>` : ""}
       ${ahead.length ? `<div class="ahead"><span class="label">Next days · tentative</span>${ahead.map(aheadRow).join("")}</div>` : ""}`;
     const top = msgs.slice(0, 2), rest = msgs.slice(2);
-    return `${daynav}${noteHtml}
+    return `${daynav}${noteHtml}${p.kind === "lift" ? tip("plan") : ""}
     <div class="coach" aria-label="Coach">
       ${vitHtml}
       <div class="today-plan">
@@ -1421,7 +1428,8 @@ function renderToday() {
 
   if (phase === "workout") {
     const allDone = done === total;
-    return `${daynav}${coachBar}
+    const firstTip = tip("tick") || tip("coach");
+    return `${daynav}${coachBar}${firstTip}
     <div class="entries">${entries}</div>
     <div class="actions">
       <button class="btn ${allDone ? "" : "primary"}" data-act="openadd">+ Add exercise</button>
@@ -1474,6 +1482,11 @@ function renderEntry(e, i, day, fatPre, actx) {
   // Ticked sets shrink to one line; untick one to edit it again
   const doneTxt = s => ex.kind === "time" ? `${s.r}s${s.w ? ` · +${fmtW(s.w)}` : ""}`
     : `${ex.kind === "bodyweight" ? (s.w ? `BW + ${fmtW(s.w)}` : "Bodyweight") : fmtW(s.w || 0)} × ${s.r}`;
+  const lastSets = prog?.last ? doneSets(prog.last.e) : [];
+  // "30 lb × 8, 8, 7" when the weight held; otherwise each set
+  const lastTxt = ex.kind !== "time" && lastSets.length && lastSets.every(x => (x.w || 0) === (lastSets[0].w || 0))
+    ? `${doneTxt(lastSets[0]).replace(/ × \d+$/, "")} × ${lastSets.map(x => x.r).join(", ")}` : lastSets.map(doneTxt).join(" · ");
+  const same = lastSets.length === e.sets.length && lastSets.every((x, k) => (x.w || 0) === (e.sets[k].w || 0) && x.r === e.sets[k].r);
   const rows = e.sets.map((s, j) => s.done ? `
     <div class="setrow done">
       <span class="idx">${j + 1}</span>
@@ -1497,6 +1510,7 @@ function renderEntry(e, i, day, fatPre, actx) {
         <button class="x" data-act="rm" data-i="${i}" aria-label="Remove ${esc(ex.name)}">×</button></div>
       ${adv.lvl ? `<div class="hint ${adv.lvl >= 2 ? "bad" : "warn"}"><b>${adv.lvl >= 2 ? "Not the best right now" : "Careful"}:</b> ${esc(adv.reasons.join("; "))}.${adv.alts.length ? `<div class="swaps">Swap for: ${adv.alts.map(a => `<button class="chipbtn" data-act="swap" data-i="${i}" data-id="${esc(a.id)}">${esc(a.name)}</button>`).join("")}</div>` : ""}</div>` : ""}
       ${!prog && ex.kind === "weight" && !e.sets.some(s => s.done || s.w) ? `<div class="hint info">First time: pick a weight you could lift 2–3 more reps than the target with good form. Go lighter if unsure; the coach takes it from there.</div>` : ""}
+      ${lastSets.length && !e.sets.some(s => s.done) ? `<div class="lastline small muted">Last time, ${fmtDay(prog.last.day)}: <span class="num">${lastTxt}</span>${same ? "" : ` <button class="linkbtn" data-act="repeat" data-i="${i}">Same again</button>`}</div>` : ""}
       ${prog && !e.sets.some(s => s.done) ? `<div class="hint ${prog.bump < 0 ? "warn" : "info"}">${prog.text}${hold ? ` Not today though: ${esc(S.sessions[day].trim)}, so hold the weight.` : ""}${prog.bump && !hold ? ` <button class="linkbtn" data-act="bump" data-i="${i}" data-n="${prog.bump}">Apply</button>` : ""}</div>` : ""}
       ${allDone ? "" : `<div class="setrow small muted" aria-hidden="true"><span></span><span class="label">${ex.kind === "time" ? "" : ex.kind === "bodyweight" ? "Added load" : "Weight"}</span><span class="label">${ex.kind === "time" ? "Seconds" : "Reps"}</span><span></span></div>`}
       ${rows}
@@ -1814,7 +1828,7 @@ function renderPlan() {
   if (S.tab === "settings") return `
     <section class="block">
       <h2>Settings</h2>
-      <div class="list"><div class="row"><div class="l"><b>Weights in</b><div class="small muted">Only changes what you see. Your log converts either way.</div></div>
+      <div class="list">${(S.settings.tipsSeen || []).length ? `<div class="row"><div class="l"><b>Tips</b><div class="small muted">The short how-to notes shown the first time you use each screen.</div></div><button class="linkbtn" data-act="tipsreset">Show again</button></div>` : ""}<div class="row"><div class="l"><b>Weights in</b><div class="small muted">Only changes what you see. Your log converts either way.</div></div>
         <div class="unit-toggle" role="group" aria-label="Units">${["lb", "kg"].map(u => `<button type="button" data-act="unit" data-v="${u}" aria-pressed="${unit() === u}">${u}</button>`).join("")}</div></div></div>
     </section>
     <section class="block">
@@ -1856,6 +1870,7 @@ function renderPlan() {
 ` : `
     <section class="block">
       <h2>Your week</h2>
+      ${S.weekEdit ? `
       <p class="small muted" style="margin:0">No fixed days. Each morning the coach picks lift, cardio or rest from the last 7 days and how recovered you are. Lifting days are never back to back.</p>
       <div class="list">
         <div class="row"><div class="l"><b>Lifting sessions</b><div class="small muted">${liftsN} in the last 7 days</div></div>${stepper("lifts", wk.lifts, 2, 5)}</div>
@@ -1866,6 +1881,14 @@ function renderPlan() {
       </div>
       ${sch ? `<details class="fold"><summary>Original template week (reference)</summary><div style="overflow-x:auto;margin-top:8px"><table class="vt"><tbody>${[1, 2, 3, 4, 5, 6, 0].map(d => { const p = sch[d]; return p ? `<tr><td>${DOW[d]}</td><td style="text-align:left;font-family:var(--font-body)">${esc(p.label)}</td><td class="small" style="font-family:var(--font-body);color:var(--muted)">${esc(p.note || "")}</td></tr>` : ""; }).join("")}</tbody></table></div></details>` : ""}
       ${S.settings.rules ? `<details class="fold"><summary>Plan rules</summary><ul class="small" style="margin:8px 0 0;padding-left:18px">${S.settings.rules.map(r => `<li>${esc(r)}</li>`).join("")}</ul></details>` : ""}
+      <div class="actions"><button class="btn primary" data-act="weekedit">Done</button></div>` : `
+      <div class="weeksum">
+        <div class="wmeters">${[["Lifts", liftsN, wk.lifts], ["Cardio", cardioN, wk.cardio], ["Cardio min", cardioMinutes(addDays(t, -6), t), wk.cardioMin]].map(([n, v, g]) => `
+          <div class="wm"><div class="label">${n}</div><div class="num"><b>${v}</b> / ${g}</div><div class="wbar"><i style="width:${Math.min(100, g ? v / g * 100 : 0)}%"></i></div></div>`).join("")}</div>
+        <div class="small muted">Last 7 days against your weekly target. No fixed days: each morning the coach picks lift, cardio or rest, and never lifts two days running.</div>
+        <div class="small"><b>Cardio:</b> ${cardioTypes().filter(k => k !== "Walk").map(k => esc(CARDIO_TYPES[k] || k)).join(", ") || "none picked"} · <b>Rotation:</b> ${rot.map(id => esc(S.routines[id].name)).join(" → ") || "no routines yet"}</div>
+        <div><button class="btn" data-act="weekedit">Edit week</button></div>
+      </div>`}
     </section>
     <section class="block">
       <h2>Your goal</h2>
@@ -2141,6 +2164,9 @@ document.addEventListener("click", async ev => {
     case "r+": case "r-": mutate(() => { const st = E().sets[j]; const d = exById(E().ex).kind === "time" ? 5 : 1; st.r = Math.max(0, st.r + (act === "r+" ? d : -d)); }); break;
     case "effort": mutate(() => { E().effort = E().effort === b.dataset.v ? null : b.dataset.v; }); break;
     case "addset": mutate(() => { const l = E().sets[E().sets.length - 1]; E().sets.push({ w: l.w, r: l.r, done: false }); }); break;
+    case "repeat": mutate(() => { const L = progression(E().ex, S.day).last; E().sets = doneSets(L.e).map(x => ({ w: x.w || 0, r: x.r, done: false })); }); toast("Loaded last time's sets"); break;
+    case "weekedit": S.weekEdit = !S.weekEdit; render(); break;
+    case "tipok": case "tipsreset": S.settings = { ...S.settings, tipsSeen: act === "tipsreset" ? [] : [...new Set([...(S.settings.tipsSeen || []), b.dataset.k])] }; render(); if (act === "tipsreset") toast("Tips will show again"); await saveDoc("settings/main", S.settings); break;
     case "rmset": mutate(() => { E().sets.pop(); }); break;
     case "bump": mutate(() => { const n = +b.dataset.n; E().sets.forEach(s => { if (!s.done) { s.w = Math.max(0, +((s.w || 0) + n).toFixed(2)); if (n > 0 && E().rLo) s.r = E().rLo; } }); }); break;
     case "finish": mutate(s => { s.finished = !s.finished; s.finishedAt = s.finished ? Date.now() : null; }); if (S.sessions[S.day].finished) { toast("Workout logged"); window.scrollTo(0, 0); } break;

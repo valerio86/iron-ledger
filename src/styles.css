@@ -270,3 +270,17 @@ form.custom input[type=text], form.custom select { width: 100%; border: 1px soli
 .mgrid button[data-w="0.5"] { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
 .toast { position: fixed; left: 50%; bottom: calc(76px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); background: var(--fg); color: var(--bg); padding: 8px 14px; border-radius: 8px; font-size: 13px; z-index: 30; }
 @media (prefers-reduced-motion: no-preference) { .entry, .msg { transition: border-color .2s; } }
+
+/* Today, by phase: plan → workout → done */
+.btn.big { padding: 12px 18px; font-size: 16px; }
+.plan-more { display: grid; gap: 8px; margin-top: 8px; }
+.coach.mini { padding: 10px 14px; gap: 8px; margin-bottom: 12px; }
+.coach.summary { border-color: var(--good); }
+.coach.summary .pt { font-family: var(--font-display); font-weight: 800; font-size: 24px; text-transform: uppercase; line-height: 1.1; }
+.coach.summary .ahead { margin-top: 0; }
+.fuel { display: grid; gap: 4px; }
+.notesum { font-weight: 400; display: inline-block; max-width: 70vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+.setrow.done { min-height: 38px; }
+.setrow.done .donetxt { grid-column: span 2; font-family: var(--font-data); font-size: 15px; color: var(--muted); }
+.linkrow { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 10px; }
+.notecard:last-child { margin-top: 16px; }

@@ -568,7 +568,7 @@ function adviceCtx(day) {
 /* ============================== State ============================== */
 const S = {
   sessions: {}, custom: {}, routines: {}, settings: { unit: "lb" },
-  tab: "today", day: dayKey(new Date()), mode: "loading", progEx: null, progView: "lifts",
+  tab: "today", day: dayKey(new Date()), mode: "loading", progEx: null, progView: "lifts", open: {},
   cardio: [], health: {},                       // from Strava / Garmin (via Drive)
   conn: { strava: { st: "off" }, garmin: { st: "off" } },
 };
@@ -1304,6 +1304,12 @@ function render() {
   if (S.tab === "library") drawLinks();
 }
 
+// A details element whose open state survives re-renders (S.open, keyed by id)
+const fold = (id, summary, body, cls = "") => `<details class="fold ${cls}" id="${id}" ${S.open[id] ? "open" : ""}><summary>${summary}</summary>${body}</details>`;
+const MSG_RANK = { bad: 0, warn: 1, good: 2, info: 3 };
+const msgRow = m => `<div class="msg ${m.lvl}"><span class="ic">${m.ic || { bad: "!", warn: "!", good: "★", info: "i" }[m.lvl]}</span><div>${m.t}</div></div>`;
+
+// Today changes with the day: a plan before training, the sets while training, a summary once finished
 function renderToday() {
   const day = S.day, today = dayKey(new Date());
   const s = S.sessions[day];
@@ -1311,40 +1317,20 @@ function renderToday() {
   const rel = day === today ? "Today" : day === addDays(today, -1) ? "Yesterday" : day === addDays(today, 1) ? "Tomorrow" : fmtDay(day, { weekday: "long" });
   const total = (s?.entries || []).reduce((a, e) => a + e.sets.length, 0), done = (s?.entries || []).reduce((a, e) => a + doneSets(e).length, 0);
   const status = !total ? `<span class="pill neutral">Rest day</span>` : s.finished ? `<span class="pill good">✓ Logged</span>` : `<span class="pill neutral num">${done}/${total} sets</span>`;
+  const p = c.plan, empty = !s?.entries?.length;
+  const phase = empty ? "plan" : s.finished ? "done" : "workout";
 
   const ready = Object.keys(MUSCLES).filter(m => MUSCLES[m].lo > 0 || c.fatNow[m] >= 1.5).map(m => {
     const r = readiness(c.fatNow[m]);
     return `<div class="m ${r}" title="${READY_LABEL[r]}"><span>${MUSCLES[m].n}</span><span>${r === "fresh" ? "✓" : r === "rec" ? "~" : "!"}</span></div>`;
   }).join("");
+  const readyFold = fold("ready-fold", "Muscle readiness right now", `<div class="ready" style="margin-top:8px">${ready}</div>`);
 
-  const p = c.plan, empty = !s?.entries?.length;
-  const KIND = { lift: ["Lift", "good"], cardio: ["Cardio", "neutral"], rest: ["Rest", "warn"], done: ["Done", "good"] };
-  const planBtns = [];
-  const adapt = p.kind === "lift" && empty ? adaptRoutine(p.routine, day) : null;
-  if (adapt) {
-    planBtns.push(`<button class="chipbtn primary" data-act="routine" data-id="${esc(p.routine.id)}">▶ Start ${esc(p.routine.name)}${adapt.changes.length ? " (adjusted)" : p.trim ? " (lighter)" : ""}</button>`);
-    if (adapt.changes.length) planBtns.push(`<button class="chipbtn" data-act="routine" data-raw="1" data-id="${esc(p.routine.id)}">As written</button>`);
-  }
-  const adaptHtml = adapt?.changes.length ? `<div class="adapt"><div class="label">Adjusted for today</div><ul>${adapt.changes.map(c => `<li>${c}</li>`).join("")}</ul></div>` : "";
-  const ahead = day === today ? forecast(day, 4) : [];
-  const aheadHtml = ahead.length ? `<div class="ahead"><span class="label">Next days · tentative</span>${ahead.map(({ day: k, p: q }) =>
-    `<div class="ad"><b>${fmtDay(k, { weekday: "short" })}</b><span class="pill ${KIND[q.kind][1]}">${KIND[q.kind][0]}</span><span>${esc(q.kind === "lift" ? q.routine.name + (q.addon ? ` + ${q.addon.mins}′ easy cardio` : "") : q.kind === "cardio" ? `${q.title} · ${q.mins || 30}′` : q.title)}</span></div>`).join("")}</div>` : "";
-  if (empty && p.kind !== "done") p.alts.forEach(r => planBtns.push(`<button class="chipbtn" data-act="routine" data-id="${esc(r.id)}">${p.kind === "lift" ? "Or " : "Lift anyway: "}${esc(r.name)}</button>`));
-  const planHtml = `
-    <div class="today-plan">
-      <div class="label">${day === today ? "Suggested today" : "Suggested for this day"} <span class="pill ${KIND[p.kind][1]}">${KIND[p.kind][0]}</span></div>
-      <div class="pt">${esc(p.title)}</div>
-      ${p.note ? `<div class="small">${esc(p.note)}</div>` : ""}
-      ${p.addon ? `<div class="small"><b>+ Cardio:</b> ${esc(p.addon.text)}</div>` : ""}
-      ${fuelLine(day, p)}
-      ${adaptHtml}
-      <ul class="why">${p.why.map(w => `<li>${w}</li>`).join("")}</ul>
-      ${planBtns.length ? `<div class="suggest">${planBtns.join("")}</div>` : ""}
-      ${aheadHtml}
-    </div>`;
+  // Coach messages, most serious first; only the top two stay open
   const sugg = [];
   if (p.kind === "lift" || (p.kind === "done" && !empty)) c.exSuggest.forEach(e => sugg.push(`<button class="chipbtn" data-act="add" data-id="${esc(e.id)}">+ ${esc(e.name)}</button>`));
-  const suggestLine = sugg.length && c.gaps.length ? `Fresh and short of this week's target: ${c.gaps.map(g => `<b>${MUSCLES[g.m].n.toLowerCase()}</b>`).join(", ")}.` : "";
+  const msgs = [...c.msgs].sort((a, b) => MSG_RANK[a.lvl] - MSG_RANK[b.lvl]);
+  if (sugg.length && c.gaps.length) msgs.push({ lvl: "info", ic: "→", t: `Fresh and short of this week's target: ${c.gaps.map(g => `<b>${MUSCLES[g.m].n.toLowerCase()}</b>`).join(", ")}.<div class="suggest" style="margin-top:6px">${sugg.join("")}</div>` });
 
   const h = healthOn(day), lw = latestWeight(day);
   const vit = [];
@@ -1355,53 +1341,116 @@ function renderToday() {
   if (lw) vit.push(`<span class="pill neutral">${fmtW(lw.weightLb)}${lw.bodyFatPct ? ` · ${lw.bodyFatPct}% fat` : ""}</span>`);
   const dayCardio = S.cardio.filter(a => a.day === day && a.re >= CARDIO_MIN_EFFORT);
   for (const a of dayCardio) vit.push(`<span class="pill neutral">${esc(a.sport)} ${a.mins}′ · effort ${a.re}</span>`);
-  const coachHtml = `
-    <div class="coach" aria-label="Coach">
-      <div class="head"><h3>Coach</h3><span class="small muted">last 7 days · ${totalSets(addDays(day, -6), day).toFixed(0)} hard sets</span></div>
-      ${vit.length ? `<div class="suggest">${vit.join("")}</div>` : ""}
-      ${planHtml}
-      <div class="msgs">
-        ${c.msgs.map(m => `<div class="msg ${m.lvl}"><span class="ic">${{ bad: "!", warn: "!", good: "★", info: "i" }[m.lvl]}</span><div>${m.t}</div></div>`).join("")}
-        ${suggestLine ? `<div class="msg info"><span class="ic">→</span><div>${suggestLine}</div></div>` : ""}
-      </div>
-      ${sugg.length ? `<div class="suggest">${sugg.join("")}</div>` : ""}
-      <details class="fold" id="ready-fold" ${S.readyOpen ? "open" : ""}><summary>Muscle readiness right now</summary><div class="ready" style="margin-top:8px">${ready}</div></details>
-    </div>`;
+  const vitHtml = vit.length ? `<div class="suggest">${vit.join("")}</div>` : "";
 
-  const actx = adviceCtx(day);
-  const entries = (s?.entries || []).map((e, i) => renderEntry(e, i, day, c.fatPre, actx)).join("");
+  const KIND = { lift: ["Lift", "good"], cardio: ["Cardio", "neutral"], rest: ["Rest", "warn"], done: ["Done", "good"] };
+  const ahead = day === today ? forecast(day, phase === "done" ? 1 : 4) : [];
+  const aheadRow = ({ day: k, p: q }) => `<div class="ad"><b>${fmtDay(k, { weekday: "short" })}</b><span class="pill ${KIND[q.kind][1]}">${KIND[q.kind][0]}</span><span>${esc(q.kind === "lift" ? q.routine.name + (q.addon ? ` + ${q.addon.mins}′ easy cardio` : "") : q.kind === "cardio" ? `${q.title} · ${q.mins || 30}′` : q.title)}</span></div>`;
+
   // Day notes: today's parsed issues (removable) + ones carried from earlier days (mark better)
+  const actx = adviceCtx(day);
   const todayIssues = (s?.issues || []);
   const carried = actx.issues.filter(i => i.day !== day);
+  const note = (s?.note || "").trim();
   const noteHtml = `
     <div class="notecard">
-      <label class="label" for="daynote">Notes · how does your body feel?</label>
-      <textarea id="daynote" rows="2" placeholder="e.g. left knee creaking, slept badly, sore quads">${esc(s?.note || "")}</textarea>
+      ${fold("note-fold", note ? `Note: <span class="notesum">${esc(note)}</span>` : "How does your body feel? Add a note", `
+        <textarea id="daynote" rows="2" placeholder="e.g. left knee creaking, slept badly, sore quads" aria-label="How does your body feel?" style="margin-top:8px">${esc(s?.note || "")}</textarea>
+        <div class="small muted">Mention aches or how you slept, and the suggestions adjust.</div>`)}
       ${todayIssues.length || carried.length ? `<div class="issues">
         ${todayIssues.map(i => `<span class="pill ${i.sev >= 3 ? "bad" : i.sev >= 2 ? "warn" : "neutral"}">${esc(issueLabel(i))}<button class="chipx" data-act="dismississue" data-k="${esc(i.k)}" aria-label="Not an issue: ${esc(issueLabel(i))}">×</button></span>`).join("")}
         ${carried.map(i => `<span class="pill ${i.sev >= 3 ? "bad" : i.sev >= 2 ? "warn" : "neutral"}">${esc(issueLabel(i))} <span class="muted">(${fmtDay(i.day, { weekday: "short" })})</span><button class="chipx ok" data-act="resolveissue" data-k="${esc(i.k)}" aria-label="Better now: ${esc(issueLabel(i))}">Better ✓</button></span>`).join("")}
-      </div>` : `<div class="small muted">Mention aches or how you slept, and the suggestions adjust.</div>`}
+      </div>` : ""}
     </div>`;
-  return `
+
+  const daynav = `
     <div class="daynav">
       <button class="iconbtn" data-act="prevday" aria-label="Previous day">‹</button>
       <div class="d"><div class="big">${rel}</div><div class="small muted">${fmtDay(day, { weekday: "short", month: "long", day: "numeric", year: "numeric" })} · ${status}</div></div>
       ${day !== today ? `<button class="chipbtn primary" data-act="gotoday">Today</button>` : ""}
       <button class="iconbtn" data-act="nextday" aria-label="Next day">›</button>
-    </div>
-    ${noteHtml}
-    ${coachHtml}
-    <div class="entries">${entries || `<div class="empty"><b>Nothing logged ${day === today ? "yet today" : "on this day"}.</b><span class="small">Start a routine, or add exercises one at a time. Tick each set as you finish it. Only ticked sets count.</span></div>`}</div>
-    <div class="actions">
-      <button class="btn primary" data-act="openadd">+ Add exercise</button>
-      <button class="btn" data-act="cl-open">+ Cardio</button>
-      <button class="btn" data-act="wt-open">Weigh-in</button>
-      ${Object.keys(S.routines).length ? `<button class="btn" data-act="openroutines">Start routine</button>` : ""}
-      ${total ? `<button class="btn ${s.finished ? "ghost" : ""}" data-act="finish">${s.finished ? "Reopen day" : "Finish day"}</button>` : ""}
     </div>`;
+  const entries = (s?.entries || []).map((e, i) => renderEntry(e, i, day, c.fatPre, actx)).join("");
+  const hasRoutines = Object.keys(S.routines).length;
+
+  if (phase === "plan") {
+    const adapt = p.kind === "lift" ? adaptRoutine(p.routine, day) : null;
+    const main = adapt ? `<button class="btn primary big" data-act="routine" data-id="${esc(p.routine.id)}">▶ Start ${esc(p.routine.name)}${adapt.changes.length ? " (adjusted)" : p.trim ? " (lighter)" : ""}</button>`
+      : p.kind === "cardio" ? `<button class="btn primary big" data-act="cl-open">+ Log cardio</button>` : "";
+    const other = [];
+    if (adapt?.changes.length) other.push(`<button class="chipbtn" data-act="routine" data-raw="1" data-id="${esc(p.routine.id)}">${esc(p.routine.name)} as written</button>`);
+    if (p.kind !== "done") p.alts.forEach(r => other.push(`<button class="chipbtn" data-act="routine" data-id="${esc(r.id)}">${p.kind === "lift" ? "" : "Lift anyway: "}${esc(r.name)}</button>`));
+    const more = `
+      ${adapt?.changes.length ? `<div class="adapt"><div class="label">Adjusted for today</div><ul>${adapt.changes.map(c => `<li>${c}</li>`).join("")}</ul></div>` : ""}
+      <ul class="why">${p.why.map(w => `<li>${w}</li>`).join("")}</ul>
+      ${other.length ? `<div class="label">Or do this instead</div><div class="suggest">${other.join("")}</div>` : ""}
+      ${ahead.length ? `<div class="ahead"><span class="label">Next days · tentative</span>${ahead.map(aheadRow).join("")}</div>` : ""}`;
+    const top = msgs.slice(0, 2), rest = msgs.slice(2);
+    return `${daynav}${noteHtml}
+    <div class="coach" aria-label="Coach">
+      ${vitHtml}
+      <div class="today-plan">
+        <div class="label">${day === today ? "Suggested today" : "Suggested for this day"} <span class="pill ${KIND[p.kind][1]}">${KIND[p.kind][0]}</span></div>
+        <div class="pt">${esc(p.title)}</div>
+        ${p.note ? `<div class="small">${esc(p.note)}</div>` : ""}
+        ${p.addon ? `<div class="small"><b>+ Cardio:</b> ${esc(p.addon.text)}</div>` : ""}
+        ${main ? `<div class="suggest" style="margin-top:6px">${main}</div>` : ""}
+        ${fold("plan-fold", `Why this${other.length ? ", other options" : ""}${ahead.length ? " and the next few days" : ""}`, `<div class="plan-more">${more}</div>`)}
+      </div>
+      ${fuelLine(day, p)}
+      ${top.length ? `<div class="msgs">${top.map(msgRow).join("")}</div>` : ""}
+      ${rest.length ? fold("msgs-fold", `${rest.length} more from the coach`, `<div class="msgs" style="margin-top:8px">${rest.map(msgRow).join("")}</div>`) : ""}
+      ${readyFold}
+    </div>
+    <div class="actions">
+      ${p.kind !== "cardio" ? `<button class="btn" data-act="cl-open">+ Cardio</button>` : ""}
+      <button class="btn" data-act="wt-open">Weigh-in</button>
+      <button class="btn" data-act="openadd">+ Add exercise</button>
+      ${hasRoutines ? `<button class="btn" data-act="openroutines">Pick a routine</button>` : ""}
+    </div>`;
+  }
+
+  // During and after a workout the coach shrinks to one line; anything serious stays visible
+  const urgent = msgs.filter(m => m.lvl === "bad"), quiet = msgs.filter(m => m.lvl !== "bad");
+  const coachBar = `
+    <div class="coach mini" aria-label="Coach">
+      ${urgent.length ? `<div class="msgs">${urgent.map(msgRow).join("")}</div>` : ""}
+      ${fold("coach-fold", `Coach${quiet.length ? ` · ${quiet.length} note${quiet.length > 1 ? "s" : ""}` : ""}${phase === "workout" ? ` · ${esc(p.title)}` : ""}`,
+        `<div style="display:grid;gap:10px;margin-top:8px">${vitHtml}${quiet.length ? `<div class="msgs">${quiet.map(msgRow).join("")}</div>` : ""}${readyFold}</div>`)}
+    </div>`;
+  const links = `<div class="linkrow"><button class="linkbtn" data-act="cl-open">+ Cardio</button><button class="linkbtn" data-act="wt-open">Weigh-in</button>${hasRoutines && phase === "workout" ? `<button class="linkbtn" data-act="openroutines">Add a routine</button>` : ""}</div>`;
+
+  if (phase === "workout") {
+    const allDone = done === total;
+    return `${daynav}${coachBar}
+    <div class="entries">${entries}</div>
+    <div class="actions">
+      <button class="btn ${allDone ? "" : "primary"}" data-act="openadd">+ Add exercise</button>
+      <button class="btn ${allDone ? "primary" : ""}" data-act="finish">Finish workout</button>
+    </div>
+    ${links}${noteHtml}`;
+  }
+
+  // Done: what got logged, any new bests, what's next
+  const ts = (s.entries || []).flatMap(e => doneSets(e).map(x => x.t)).filter(Boolean).sort((a, b) => a - b);
+  const mins = ts.length > 1 ? Math.round((ts[ts.length - 1] - ts[0]) / 6e4) : 0;
+  const exN = s.entries.filter(e => doneSets(e).length).length;
+  const bests = c.msgs.filter(m => m.lvl === "good" && m.t.startsWith("New best"));
+  return `${daynav}
+    <div class="coach summary">
+      <div class="label">Workout logged</div>
+      <div class="pt">${done} sets · ${exN} exercise${exN === 1 ? "" : "s"}${mins >= 5 ? ` · ${mins} min` : ""}</div>
+      ${bests.length ? `<div class="msgs">${bests.map(msgRow).join("")}</div>` : ""}
+      ${fuelLine(day, p)}
+      ${ahead.length ? `<div class="ahead"><span class="label">Next up · tentative</span>${ahead.map(aheadRow).join("")}</div>` : ""}
+    </div>
+    ${coachBar}
+    ${fold("done-sets", `See the sets`, `<div class="entries" style="margin-top:10px">${entries}</div>`)}
+    <div class="actions"><button class="btn ghost" data-act="finish">Reopen workout</button></div>
+    ${links}${noteHtml}`;
 }
 
-// Today's food targets: total kcal, protein, and when to eat given the day's training
+// Today's food targets: total kcal and protein up front; timing and ideas folded
 function fuelLine(day, p) {
   const F = fuel(day), lift = p.kind === "lift" || liftedOn(day);
   const doneMins = cardioMinutes(day, day), planMins = p.kind === "cardio" ? p.mins || 30 : p.addon?.mins || 0;
@@ -1409,9 +1458,10 @@ function fuelLine(day, p) {
   const tip = lift ? "Carbs and some protein 1–2 h before lifting; a protein-heavy meal within a few hours after."
     : extra ? "Carbs before or after cardio keep it from eating into the surplus."
     : "Eat the same as a training day. Muscle gets built on rest days.";
-  return `<div class="small"><b>Fuel:</b> ~${(F.kcal + extra).toLocaleString()} kcal${extra ? ` (incl. ~${extra} for ${mins}′ cardio)` : ""} · <b>${F.prot} g protein</b>, about 30–40 g at each of 4 meals. ${tip}</div>
-    <div class="small muted"><b>Protein idea:</b> ${(() => { const i = daysBetween("2026-01-01", day), a = PROTEIN_IDEAS[(i * 3) % PROTEIN_IDEAS.length], b = PROTEIN_IDEAS[(i * 3 + 5) % PROTEIN_IDEAS.length];
-      return lift ? `${POST_LIFT[i % POST_LIFT.length]}, or ${a}` : `${a}, or ${b}`; })()}.</div>`;
+  const i = daysBetween("2026-01-01", day), a = PROTEIN_IDEAS[(i * 3) % PROTEIN_IDEAS.length], b = PROTEIN_IDEAS[(i * 3 + 5) % PROTEIN_IDEAS.length];
+  const idea = lift ? `${POST_LIFT[i % POST_LIFT.length]}, or ${a}` : `${a}, or ${b}`;
+  return `<div class="fuel small"><div><b>Fuel:</b> ~${(F.kcal + extra).toLocaleString()} kcal${extra ? ` (incl. ~${extra} for ${mins}′ cardio)` : ""} · <b>${F.prot} g protein</b></div>
+    ${fold("fuel-fold", "Timing and protein ideas", `<div class="small" style="margin-top:4px">About 30–40 g protein at each of 4 meals. ${tip}</div><div class="small muted"><b>Protein idea:</b> ${idea}.</div>`)}</div>`;
 }
 
 function renderEntry(e, i, day, fatPre, actx) {
@@ -1422,7 +1472,15 @@ function renderEntry(e, i, day, fatPre, actx) {
   const hold = S.sessions[day]?.trim && prog?.bump > 0;   // lighter day: don't push the weight up
   const adv = e.sets.some(s => s.done) ? { lvl: 0 } : exerciseAdvice(e.ex, day, actx);
   const prim = Object.entries(ex.muscles).filter(([, w]) => w >= .75).map(([m]) => MUSCLES[m]?.n).filter(Boolean).join(" · ");
-  const rows = e.sets.map((s, j) => `
+  // Ticked sets shrink to one line; untick one to edit it again
+  const doneTxt = s => ex.kind === "time" ? `${s.r}s${s.w ? ` · +${fmtW(s.w)}` : ""}`
+    : `${ex.kind === "bodyweight" ? (s.w ? `BW + ${fmtW(s.w)}` : "Bodyweight") : fmtW(s.w || 0)} × ${s.r}`;
+  const rows = e.sets.map((s, j) => s.done ? `
+    <div class="setrow done">
+      <span class="idx">${j + 1}</span>
+      <span class="donetxt num">${doneTxt(s)}</span>
+      <button class="check" data-act="done" data-i="${i}" data-j="${j}" aria-pressed="true" aria-label="Set ${j + 1} done. Tap to edit">✓</button>
+    </div>` : `
     <div class="setrow">
       <span class="idx">${j + 1}</span>
       ${ex.kind === "time" ? `<span class="small muted">${s.w ? "" : "bodyweight"}</span>` : `
@@ -1441,12 +1499,12 @@ function renderEntry(e, i, day, fatPre, actx) {
       ${adv.lvl ? `<div class="hint ${adv.lvl >= 2 ? "bad" : "warn"}"><b>${adv.lvl >= 2 ? "Not the best right now" : "Careful"}:</b> ${esc(adv.reasons.join("; "))}.${adv.alts.length ? `<div class="swaps">Swap for: ${adv.alts.map(a => `<button class="chipbtn" data-act="swap" data-i="${i}" data-id="${esc(a.id)}">${esc(a.name)}</button>`).join("")}</div>` : ""}</div>` : ""}
       ${!prog && ex.kind === "weight" && !e.sets.some(s => s.done || s.w) ? `<div class="hint info">First time: pick a weight you could lift 2–3 more reps than the target with good form. Go lighter if unsure; the coach takes it from there.</div>` : ""}
       ${prog && !e.sets.some(s => s.done) ? `<div class="hint ${prog.bump < 0 ? "warn" : "info"}">${prog.text}${hold ? ` Not today though: ${esc(S.sessions[day].trim)}, so hold the weight.` : ""}${prog.bump && !hold ? ` <button class="linkbtn" data-act="bump" data-i="${i}" data-n="${prog.bump}">Apply</button>` : ""}</div>` : ""}
-      <div class="setrow small muted" aria-hidden="true"><span></span><span class="label">${ex.kind === "time" ? "" : ex.kind === "bodyweight" ? "Added load" : "Weight"}</span><span class="label">${ex.kind === "time" ? "Seconds" : "Reps"}</span><span></span></div>
+      ${allDone ? "" : `<div class="setrow small muted" aria-hidden="true"><span></span><span class="label">${ex.kind === "time" ? "" : ex.kind === "bodyweight" ? "Added load" : "Weight"}</span><span class="label">${ex.kind === "time" ? "Seconds" : "Reps"}</span><span></span></div>`}
       ${rows}
       <div class="foot">
-        <div class="effort" role="group" aria-label="How did it feel">
+        ${e.sets.some(s => s.done) || e.effort ? `<div class="effort" role="group" aria-label="How did it feel">
           ${Object.entries(EFFORT).map(([k, v]) => `<button data-act="effort" data-i="${i}" data-v="${k}" aria-pressed="${e.effort === k}">${v.label}</button>`).join("")}
-        </div>
+        </div>` : "<span></span>"}
         <div style="display:flex;gap:12px"><button class="linkbtn" data-act="addset" data-i="${i}">+ Set</button>${e.sets.length > 1 ? `<button class="linkbtn" data-act="rmset" data-i="${i}">− Set</button>` : ""}</div>
       </div>
     </div>`;
@@ -2016,7 +2074,7 @@ document.addEventListener("click", async ev => {
     case "addset": mutate(() => { const l = E().sets[E().sets.length - 1]; E().sets.push({ w: l.w, r: l.r, done: false }); }); break;
     case "rmset": mutate(() => { E().sets.pop(); }); break;
     case "bump": mutate(() => { const n = +b.dataset.n; E().sets.forEach(s => { if (!s.done) { s.w = Math.max(0, +((s.w || 0) + n).toFixed(2)); if (n > 0 && E().rLo) s.r = E().rLo; } }); }); break;
-    case "finish": mutate(s => { s.finished = !s.finished; s.finishedAt = s.finished ? Date.now() : null; }); if (S.sessions[S.day].finished) toast("Day logged"); break;
+    case "finish": mutate(s => { s.finished = !s.finished; s.finishedAt = s.finished ? Date.now() : null; }); if (S.sessions[S.day].finished) { toast("Workout logged"); window.scrollTo(0, 0); } break;
     case "wk": {
       const k = b.dataset.k, cur = { ...WEEK_DEFAULT, ...(S.settings.week || {}) };
       cur[k] = Math.max(0, cur[k] + +b.dataset.d);
@@ -2067,7 +2125,10 @@ document.addEventListener("change", ev => {
   const t = ev.target;
   if (t.dataset.act === "w" || t.dataset.act === "r") {
     const i = +t.dataset.i, j = +t.dataset.j;
-    mutate(s => { const st = s.entries[i].sets[j]; if (t.dataset.act === "w") st.w = t.value.trim() === "" ? 0 : fromDisp(t.value); else st.r = Math.max(0, parseInt(t.value) || 0); });
+    // A typed value also fills the later unticked sets that still held the old one
+    mutate(s => { const sets = s.entries[i].sets, k = t.dataset.act, old = sets[j][k];
+      sets[j][k] = k === "w" ? (t.value.trim() === "" ? 0 : fromDisp(t.value)) : Math.max(0, parseInt(t.value) || 0);
+      for (let n = j + 1; n < sets.length; n++) if (!sets[n].done && sets[n][k] === old) sets[n][k] = sets[j][k]; });
   }
   if (t.id === "progex") { S.progEx = t.value; render(); }
   if (t.id?.startsWith("eqmax-")) {
@@ -2088,7 +2149,7 @@ document.addEventListener("input", ev => {
     clearTimeout(noteTimer); noteTimer = setTimeout(render, 700);   // re-plan once typing pauses
     return;
   } if (ev.target.id === "cx-name") draft.name = ev.target.value; if (ev.target.id === "rname") S.rname = ev.target.value; });
-document.addEventListener("toggle", ev => { if (ev.target.id === "ready-fold") S.readyOpen = ev.target.open; }, true);
+document.addEventListener("toggle", ev => { if (ev.target.matches?.("details.fold[id]")) S.open[ev.target.id] = ev.target.open; }, true);
 document.addEventListener("submit", async ev => {
   if (ev.target.id !== "customform") return; ev.preventDefault();
   const name = draft.name.trim();

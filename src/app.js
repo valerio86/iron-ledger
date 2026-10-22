@@ -1809,6 +1809,7 @@ function renderLibrary() {
           return `<div class="row"><div class="l"><b>${n}</b><div class="small muted">${c.msg ? esc(c.msg) : d}</div></div>${pill}</div>`; }).join("")}
       </div>
       ${S.conn.garmin.st !== "ok" && MCP ? `<div class="actions" style="margin-top:0"><button class="btn" data-act="retryhealth">Look for the Garmin file again</button></div>` : ""}
+      ${renderStravaActions()}
       ${renderConnectorKey()}
     </section>
     ${renderAccount()}

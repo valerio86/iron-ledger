@@ -13,7 +13,7 @@ Not medical advice: stop if something hurts, and check with a doctor if you have
 
 ## Data from other services
 
-**Strava (coming soon).** Iron Ledger reads your activity list (type, date, duration, distance and relative effort) to estimate muscle fatigue and cardio volume. It only reads; it never posts or changes anything on Strava. Activity data stays in your own account and is deleted when you disconnect or delete your account.
+**Strava.** Iron Ledger reads your activity list (type, date, duration, distance and relative effort, including private activities) to estimate muscle fatigue and cardio volume. It only reads; it never posts or changes anything on Strava. Activity data stays in your own account and is deleted when you disconnect or delete your account.
 
 **Garmin.** Garmin has no public API for individual apps, so Garmin data comes in through a script you run on your own computer (`connectors/garmin`, written with a connector key from Library → Connections). It is not available to most users.
 
@@ -33,6 +33,6 @@ No build step. Serve the folder and open it: `python3 -m http.server 8765`, then
 **Sync model.** The device is the source of truth. Each change is pushed to `users/{uid}/docs/{path}` as `{p, d (JSON string), at, del, sat}`; other devices pull docs with a newer server timestamp. The newer edit wins per doc. Signing out wipes the device copy.
 
 ## Roadmap
-- Strava: OAuth through a small token-exchange worker (the client secret can't live in a public app).
+- Strava review, so more than one athlete can connect (`worker/strava-worker.js` runs on Cloudflare and holds the client secret and tokens).
 - Privacy-friendly error reporting, real tests.
 - Later: a native wrapper for Apple Health / Health Connect, the legitimate route to wearable data for everyone.

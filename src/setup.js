@@ -18,7 +18,9 @@ function rebuildDerived() {
     (b.cardio || []).forEach((c, i) => manual.push({ id: c.id, name: CARDIO_TYPES[c.sport] || c.sport, sport: c.sport, day,
       t: parseDay(day).getTime() + (6 + i) * 36e5, mins: c.mins, km: 0, re: c.re ?? Math.round(c.mins * (CARDIO_EFFORT[c.effort]?.re || 1)), muscles: CARDIO[c.sport] || {}, manual: true }));
   }
-  S.cardio = [...S.extCardio, ...manual];
+  // Strava-imported manual entries ("strava-<id>") give way once the live Strava feed has the same activity
+  const live = new Set(S.extCardio.map(a => "strava-" + a.id));
+  S.cardio = [...S.extCardio, ...manual.filter(a => !live.has(a.id))];
   S.health = health;
 }
 function bodyDoc(day) { return S.body[day] || { cardio: [] }; }
@@ -254,7 +256,7 @@ document.addEventListener("click", async ev => {
     }
     case "ac-del":
       if (S.confirmDel !== "account") { S.confirmDel = "account"; render(); return; }
-      try { await Sync.deleteAccount(); location.reload(); } catch (msg) { S.confirmDel = null; toast(String(msg)); render(); }
+      try { if (S.connectors.strava) await stravaDisconnect(); await Sync.deleteAccount(); location.reload(); } catch (msg) { S.confirmDel = null; toast(String(msg)); render(); }
       break;
   }
 });
@@ -264,6 +266,18 @@ document.addEventListener("click", async ev => {
 // { source, updated, days: { "YYYY-MM-DD": { readiness, sleepScore, hrv, weightLb, ... } } }. Same shape as the Drive file.
 S.connectors = {};
 function applyConnectors() {
+  const sv = S.connectors.strava;
+  if (sv?.activities) {
+    S.extCardio = sv.activities.map(a => {
+      const d = new Date(String(a.start_local).replace(/Z$/, "")), mins = Math.round((a.moving || 0) / 60);   // Strava's "local" time carries a fake Z
+      return { id: a.id, name: a.name, sport: a.sport, day: dayKey(d), t: d.getTime() + (a.elapsed || 0) * 1000, mins, km: (a.distance || 0) / 1000,
+        re: a.re ?? Math.round(mins * CARDIO_EFFORT.easy.re), muscles: CARDIO[a.sport] || {} };
+    });
+    S.conn.strava = { st: "ok", at: Date.parse(sv.updated), n: sv.activities.length, msg: `${sv.athlete ? sv.athlete + " · " : ""}updated ${new Date(Date.parse(sv.updated)).toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" })}.` };
+  } else {
+    S.extCardio = [];
+    S.conn.strava = { st: S.stravaErr ? "bad" : "soon", msg: S.stravaErr || (!stravaReady() ? "Coming soon." : window.Sync?.state.user ? "Runs, rides and rows add fatigue to the muscles they use." : "Sign in to connect Strava.") };
+  }
   const g = S.connectors.garmin;
   if (g?.days) {
     S.extHealth = g.days; rebuildDerived();
@@ -286,4 +300,76 @@ document.addEventListener("click", async ev => {
   const b = ev.target.closest("[data-act=ac-key]"); if (!b) return;
   try { await navigator.clipboard.writeText(JSON.stringify(await Sync.connectorKey())); toast("Key copied. Paste it into the file, then clear your clipboard."); }
   catch { toast("Couldn't copy. Try again."); }
+});
+
+/* ============================== Strava (through worker/strava-worker.js) ============================== */
+const STRAVA_CFG = { clientId: null, worker: null };   // filled in once the worker is deployed
+const STRAVA_EVERY = 30 * 60e3, STRAVA_DAYS = 60;
+function stravaReady() { return !!(STRAVA_CFG.clientId && STRAVA_CFG.worker); }
+async function stravaCall(path, body) {
+  const r = await fetch(STRAVA_CFG.worker + path, { method: body ? "POST" : "GET",
+    headers: { Authorization: `Bearer ${await Sync.idToken()}`, "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw Object.assign(new Error(j.error || `HTTP ${r.status}`), { code: j.error });
+  return j;
+}
+function stravaConnect() {
+  const state = crypto.randomUUID();
+  try { sessionStorage.setItem("il-strava-state", state); } catch {}
+  const back = location.origin + location.pathname;
+  location.href = `https://www.strava.com/oauth/authorize?client_id=${STRAVA_CFG.clientId}&response_type=code&approval_prompt=auto`
+    + `&scope=activity:read_all&redirect_uri=${encodeURIComponent(back)}&state=${state}`;
+}
+// Coming back from Strava: ?code=…&scope=…&state=… (or ?error=access_denied)
+(function stravaReturn() {
+  const q = new URLSearchParams(location.search);
+  if (!q.has("state") || !(q.has("code") || q.has("error"))) return;
+  let expected = null; try { expected = sessionStorage.getItem("il-strava-state"); sessionStorage.removeItem("il-strava-state"); } catch {}
+  history.replaceState(null, "", location.pathname);
+  if (q.get("error")) S.stravaErr = "Strava connection cancelled.";
+  else if (q.get("state") !== expected) S.stravaErr = "Connect Strava again from this same browser tab.";
+  else if (!/activity:read/.test(q.get("scope") || "")) S.stravaErr = "Strava needs “View data about your activities” ticked. Connect again.";
+  else S.stravaPending = { code: q.get("code"), scope: q.get("scope") };
+  if (q.get("error") || S.stravaErr) S.tab = "library";
+})();
+async function stravaSync(force = false) {
+  if (!stravaReady() || !window.Sync?.state.user || !DB) return;
+  try {
+    if (S.stravaPending) {
+      const p = S.stravaPending; S.stravaPending = null; S.stravaErr = null;
+      const r = await stravaCall("/strava/exchange", p);
+      await DB.doc("connectors/strava").set({ source: "strava", updated: new Date(0).toISOString(), athlete: r.athlete?.firstname || "", activities: [] });
+      force = true; toast("Strava connected");
+    }
+    const cur = S.connectors.strava;
+    if (!cur || (!force && Date.now() - Date.parse(cur.updated) < STRAVA_EVERY)) return;
+    const after = Math.floor((Date.now() - STRAVA_DAYS * 864e5) / 1000);
+    const { activities } = await stravaCall(`/strava/activities?after=${after}`);
+    S.stravaErr = null;
+    await DB.doc("connectors/strava").set({ ...cur, updated: new Date().toISOString(), activities });
+  } catch (e) {
+    if (e.code === "not_connected") { S.stravaErr = "Strava access ended. Connect again."; await DB.doc("connectors/strava").delete(); }
+    else S.stravaErr = e.code === "rate_limited" ? "Strava is busy. It will try again later." : `Strava: ${e.message}`;
+    applyConnectors(); render();
+  }
+}
+async function stravaDisconnect() {
+  try { await stravaCall("/strava/disconnect", {}); } catch {}
+  if (S.connectors.strava) await DB.doc("connectors/strava").delete();
+}
+function renderStravaActions() {
+  if (!stravaReady() || !window.Sync?.state.user) return "";
+  return S.connectors.strava
+    ? `<div class="actions" style="margin-top:0"><button class="btn" data-act="sv-sync">Refresh Strava</button><button class="btn ghost" data-act="sv-off">Disconnect Strava</button></div>`
+    : `<div class="actions" style="margin-top:0"><button class="btn" data-act="sv-on" style="background:#FC5200;border-color:#FC5200;color:#fff">Connect with Strava</button></div>
+       <p class="small muted" style="margin:0">Easiest from a computer's browser. Once connected, it works on all your devices.</p>`;
+}
+window.addEventListener("il-user", () => stravaSync());
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") stravaSync(); });
+setInterval(() => stravaSync(), 5 * 60e3);
+document.addEventListener("click", async ev => {
+  const b = ev.target.closest("[data-act^=sv-]"); if (!b) return;
+  if (b.dataset.act === "sv-on") stravaConnect();
+  if (b.dataset.act === "sv-sync") { await stravaSync(true); toast(S.stravaErr || "Strava refreshed"); }
+  if (b.dataset.act === "sv-off") { await stravaDisconnect(); S.stravaErr = null; applyConnectors(); render(); toast("Strava disconnected"); }
 });

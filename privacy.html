@@ -40,7 +40,7 @@ body { margin: 0; }
 
   <h2>Connected services</h2>
   <ul>
-    <li><b>Strava</b> (when available): read-only access to your activity list (type, date, duration, distance and relative effort) to estimate muscle fatigue and cardio volume. Nothing is posted or changed on Strava. The activities are stored in your account and deleted when you disconnect Strava or delete your account.</li>
+    <li><b>Strava:</b> read-only access to your activity list (type, date, duration, distance and relative effort, including activities you've marked private) to estimate muscle fatigue and cardio volume. Nothing is posted or changed on Strava. Your Strava access tokens are kept on a small server (Cloudflare) so they never sit in the app, and are used only to fetch your activities. The activities are stored in your account. Disconnecting Strava or deleting your account revokes the access at Strava and deletes the tokens and activities.</li>
     <li><b>Sync scripts</b> (advanced): a connector key lets a script on your own computer, such as a Garmin sync, write to your log. The key works like your sign-in, so keep it private.</li>
   </ul>
 

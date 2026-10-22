@@ -1809,9 +1809,10 @@ function renderLibrary() {
       </div>
       ${S.conn.garmin.st !== "ok" && MCP ? `<div class="actions" style="margin-top:0"><button class="btn" data-act="retryhealth">Look for the Garmin file again</button></div>` : ""}
     </section>
+    ${renderAccount()}
     <section class="block">
       <h2>Backup</h2>
-      <p class="small muted" style="margin:0">Your log is saved on this device only. Download a backup now and then, and restore it here or on another device.</p>
+      <p class="small muted" style="margin:0">${window.Sync?.state.user ? "Your log is synced to your account. A backup file is still handy as an extra copy." : "Your log is saved on this device only. Download a backup now and then, or sign in above to sync it."}</p>
       <div class="actions" style="margin-top:0"><button class="btn" data-act="export">Download backup</button><button class="btn" data-act="import">Restore from backup…</button></div>
       <input type="file" id="importfile" accept="application/json,.json" hidden>
     </section>`;

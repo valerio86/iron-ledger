@@ -45,6 +45,7 @@ body { margin: 0; padding-top: env(safe-area-inset-top, 0px); }
 <script src="src/store.js"></script>
 <script src="src/app.js"></script>
 <script src="src/setup.js"></script>
+<script type="module" src="src/sync.js"></script>
 <script>
 if ("serviceWorker" in navigator && location.protocol !== "file:") navigator.serviceWorker.register("sw.js").catch(() => {});
 </script>

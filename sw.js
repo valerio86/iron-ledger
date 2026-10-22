@@ -1,7 +1,7 @@
 // Offline shell: precache the app so it opens without a connection.
 // Bump VERSION when SHELL's file list changes.
-const VERSION = "il-v2";
-const SHELL = ["./", "index.html", "src/styles.css", "src/store.js", "src/app.js", "src/setup.js", "manifest.webmanifest", "icons/icon.svg", "icons/icon-192.png"];
+const VERSION = "il-v3";
+const SHELL = ["./", "index.html", "src/styles.css", "src/store.js", "src/app.js", "src/setup.js", "src/sync.js", "src/firebase-config.js", "manifest.webmanifest", "icons/icon.svg", "icons/icon-192.png"];
 
 self.addEventListener("install", e => { e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener("activate", e => {

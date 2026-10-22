@@ -141,8 +141,8 @@ function renderSetup() {
          <div class="row"><div class="l"><b>Sessions a week</b></div><span class="stepper" style="display:inline-flex;width:auto"><button data-act="ob-cn" data-d="-1" aria-label="Fewer">−</button><span class="num" style="min-width:24px;text-align:center">${d.cardioN}</span><button data-act="ob-cn" data-d="1" aria-label="More">+</button></span></div>
          <div class="row"><div class="l"><b>Minutes a week</b></div><span class="stepper" style="display:inline-flex;width:auto"><button data-act="ob-cm" data-d="-10" aria-label="Fewer">−</button><span class="num" style="min-width:36px;text-align:center">${d.cardioMin}</span><button data-act="ob-cm" data-d="10" aria-label="More">+</button></span></div>
        </div>`)}
-    <div class="actions"><button class="btn primary" data-act="ob-done">Start training</button><button class="btn ghost" data-act="import">Restore a backup instead</button></div>
-    <p class="small muted">Everything stays on this device. Not medical advice: stop if something hurts, and check with a doctor if you have an injury or condition.</p>`;
+    <div class="actions"><button class="btn primary" data-act="ob-done">Start training</button>${window.Sync?.state.configured ? `<button class="btn ghost" data-act="ac-open">I have an account</button>` : ""}<button class="btn ghost" data-act="import">Restore a backup instead</button></div>
+    <p class="small muted">Everything stays on this device unless you sign in to sync. Not medical advice: stop if something hurts, and check with a doctor if you have an injury or condition.</p>`;
 }
 async function finishSetup() {
   const d = obDraft(), today = dayKey(new Date());
@@ -196,5 +196,65 @@ document.addEventListener("click", async ev => {
       if (!isFinite(n) || n <= 0) { toast("Enter a weight"); return; }
       await saveBody(S.day, { ...bodyDoc(S.day), weightLb: fromDisp(n) }); closeSheet(); toast("Weigh-in saved"); break; }
     case "wt-del": { const bd = { ...bodyDoc(S.day) }; delete bd.weightLb; await saveBody(S.day, bd); closeSheet(); break; }
+  }
+});
+
+/* ============================== Account (sync.js does the work) ============================== */
+const SYNC_TXT = { off: "", syncing: "Syncing…", saving: "Saving…", synced: "Synced", error: "Sync problem" };
+function renderAccount() {
+  const st = window.Sync?.state; if (!st?.configured) return "";
+  const u = st.user;
+  return `<section class="block">
+    <h2>Account</h2>
+    ${u ? `<div class="list"><div class="row"><div class="l"><b>${esc(u.name || u.email)}</b><div class="small muted">${esc(u.name ? u.email : "")}${st.msg ? ` · ${esc(st.msg)}` : ""}</div></div>
+        <span class="pill ${st.status === "error" ? "bad" : st.status === "synced" ? "good" : "neutral"}">${SYNC_TXT[st.status] || ""}</span></div></div>
+      <div class="actions" style="margin-top:0"><button class="btn" data-act="ac-out">Sign out</button><button class="btn ghost" data-act="ac-del" style="color:var(--bad)">${S.confirmDel === "account" ? "Tap again to delete everything" : "Delete account"}</button></div>
+      <p class="small muted" style="margin:0">Signing out removes the log from this device. It stays in your account. Deleting the account erases it everywhere.</p>`
+    : `<p class="small muted" style="margin:0">Sign in to keep your log in sync across your phone and computer, and safe if you lose a device. Without an account it stays on this device only.</p>
+      <div class="actions" style="margin-top:0"><button class="btn primary" data-act="ac-open">Sign in or create account</button></div>`}
+  </section>`;
+}
+function openAccount(mode = "in", msg = "") {
+  const email = $("#ac-email")?.value || "";
+  $("#sheet").innerHTML = `<div class="sheet-bg" data-act="closesheet"><div class="sheet" role="dialog" aria-label="Account">
+    <div class="sh"><div style="display:flex;justify-content:space-between;align-items:center"><h2>${mode === "up" ? "Create account" : mode === "reset" ? "Reset password" : "Sign in"}</h2><button class="x iconbtn" data-act="closesheet" aria-label="Close">×</button></div></div>
+    <form class="sb" id="ac-form" data-mode="${mode}" style="display:grid;gap:10px;padding-top:12px">
+      ${mode !== "reset" ? `<button type="button" class="btn" data-act="ac-google">Continue with Google</button><div class="small muted" style="text-align:center">or with email</div>` : ""}
+      <input class="search" id="ac-email" type="email" autocomplete="email" placeholder="Email" value="${esc(email)}" required>
+      ${mode !== "reset" ? `<input class="search" id="ac-pw" type="password" autocomplete="${mode === "up" ? "new-password" : "current-password"}" placeholder="Password${mode === "up" ? " (6+ characters)" : ""}" required>` : ""}
+      ${msg ? `<div class="hint ${/sent/i.test(msg) ? "info" : "bad"}">${esc(msg)}</div>` : ""}
+      <button class="btn primary" type="submit">${mode === "up" ? "Create account" : mode === "reset" ? "Send reset email" : "Sign in"}</button>
+      <div class="small" style="display:flex;gap:16px;flex-wrap:wrap">
+        ${mode !== "in" ? `<button type="button" class="linkbtn" data-act="ac-mode" data-v="in">I have an account</button>` : `<button type="button" class="linkbtn" data-act="ac-mode" data-v="up">Create an account</button>`}
+        ${mode !== "reset" ? `<button type="button" class="linkbtn" data-act="ac-mode" data-v="reset">Forgot password</button>` : ""}
+      </div>
+      <p class="small muted" style="margin:0">Your current log on this device is added to the account.</p>
+    </form></div></div>`;
+}
+document.addEventListener("submit", async ev => {
+  if (ev.target.id !== "ac-form") return;
+  ev.preventDefault();
+  const mode = ev.target.dataset.mode, email = $("#ac-email").value.trim(), pw = $("#ac-pw")?.value;
+  try {
+    if (mode === "reset") { await Sync.reset(email); openAccount("in", "Reset email sent. Check your inbox."); return; }
+    await (mode === "up" ? Sync.signUp(email, pw) : Sync.signIn(email, pw));
+    closeSheet(); toast("Signed in. Syncing your log.");
+  } catch (msg) { openAccount(mode, String(msg)); }
+});
+document.addEventListener("click", async ev => {
+  const b = ev.target.closest("[data-act]"); if (!b || !b.dataset.act.startsWith("ac-")) return;
+  switch (b.dataset.act) {
+    case "ac-open": openAccount(); break;
+    case "ac-mode": openAccount(b.dataset.v); break;
+    case "ac-google": try { await Sync.google(); closeSheet(); toast("Signed in. Syncing your log."); } catch (msg) { openAccount("in", String(msg)); } break;
+    case "ac-out": {
+      const left = (await LocalStore.open()).pending().length;
+      if (left && !confirm("Some changes haven't reached your account yet (no connection?). Sign out anyway and lose them?")) return;
+      await Sync.signOut(); location.reload(); break;
+    }
+    case "ac-del":
+      if (S.confirmDel !== "account") { S.confirmDel = "account"; render(); return; }
+      try { await Sync.deleteAccount(); location.reload(); } catch (msg) { S.confirmDel = null; toast(String(msg)); render(); }
+      break;
   }
 });

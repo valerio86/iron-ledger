@@ -1329,7 +1329,9 @@ function renderToday() {
   const c = coach(day);
   const rel = day === today ? "Today" : day === addDays(today, -1) ? "Yesterday" : day === addDays(today, 1) ? "Tomorrow" : fmtDay(day, { weekday: "long" });
   const total = (s?.entries || []).reduce((a, e) => a + e.sets.length, 0), done = (s?.entries || []).reduce((a, e) => a + doneSets(e).length, 0);
-  const status = !total ? (day < today ? `<span class="pill neutral">Rest day</span>` : "") : s.finished ? `<span class="pill good">✓ Logged</span>` : `<span class="pill neutral num">${done}/${total} sets</span>`;
+  const cmins = cardioOn(day, day).reduce((a, x) => a + x.mins, 0);
+  const cardioPill = cmins ? `<span class="pill good">✓ Cardio · ${cmins}′</span>` : "";
+  const status = !total ? (cardioPill || (day < today ? `<span class="pill neutral">Rest day</span>` : "")) : (s.finished ? `<span class="pill good">✓ Logged</span>` : `<span class="pill neutral num">${done}/${total} sets</span>`) + (cardioPill ? " " + cardioPill : "");
   const p = c.plan, empty = !s?.entries?.length;
   const phase = empty ? "plan" : s.finished ? "done" : "workout";
 

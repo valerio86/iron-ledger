@@ -934,7 +934,11 @@ function planDay(day) {
 
   // Cardio target is minutes as well as sessions; each remaining session gets its share of the missing minutes
   const minsT = wk.cardioMin, minsDone = cardioMinutes(addDays(day, -6), yest);
-  const perSess = Math.min(60, Math.max(20, Math.round((minsT - minsDone) / Math.max(1, wk.cardio - cardio.length) / 5) * 5));
+  // The long session builds a week at a time: your longest in the 3 weeks before this one, +10 min, up to the usual 45.
+  // While it's building, no other session is planned longer than it
+  const longest = Math.max(0, ...cardioOn(addDays(day, -28), addDays(day, -7)).map(a => a.mins));
+  const longMin = Math.min(45, Math.max(25, Math.round((longest + 10) / 5) * 5)), building = longMin < 45;
+  const perSess = Math.min(building ? longMin : 60, Math.max(20, Math.round((minsT - minsDone) / Math.max(1, wk.cardio - cardio.length) / 5) * 5));
   const cardioShort = cardio.length < wk.cardio || minsDone < minsT * .8;
   why.push(`${liftDays.length} of ${wk.lifts} lifts and ${cardio.length} of ${wk.cardio} cardio sessions (${minsDone} of ${minsT} min) in the past 6 days`);
   if (lastLift) why.push(`last lift: ${esc(routineOf(lastLift)?.name || "custom session")}, ${agoText(lastLift, day)}`);
@@ -945,7 +949,10 @@ function planDay(day) {
   const low = h.readiness != null && h.readiness < 50;
   const cardioPick = () => {
     if (tr.hrvDown || tr.rhrUp) return { kind: "cardio", mins: 25, title: "Short easy cardio, or rest", note: `20–30 min, conversational${z2Text()}. Recovery is dipping, and cardio is the first thing to cut, before lifting.` };
-    if (!cardio.some(a => a.mins >= 45)) { const m = Math.max(45, perSess); return { kind: "cardio", mins: m, title: `Long Zone 2: ${cardioWords()}`, note: `${m}–${m + 15} min, easy enough to hold a conversation${z2Text()}.` }; }
+    if (!cardio.some(a => a.mins >= longMin)) {
+      if (building) return { kind: "cardio", mins: longMin, title: `Long Zone 2: ${cardioWords()}`, note: `${longMin} min${longest ? `, about 10 more than your longest in recent weeks (${longest})` : ""}. Easy enough to hold a conversation${z2Text()}. Stop early if you need to; it builds up to 45–60 week by week.` };
+      const m = Math.max(45, perSess); return { kind: "cardio", mins: m, title: `Long Zone 2: ${cardioWords()}`, note: `${m}–${m + 15} min, easy enough to hold a conversation${z2Text()}.` };
+    }
     if (cardioTypes().includes("Run") && cardioTypes().length > 1 && !/Run/.test(cardio[cardio.length - 1]?.sport || "")) { const m = Math.min(35, perSess); return { kind: "cardio", mins: m, title: "Slow recovery run", note: `${m} min, conversational pace${z2Text()}.` }; }
     return { kind: "cardio", mins: perSess, title: `Easy Zone 2: ${cardioWords()}`, note: `${perSess} min${z2Text()}.` };
   };

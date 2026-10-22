@@ -15,7 +15,7 @@ Not medical advice: stop if something hurts, and check with a doctor if you have
 
 **Strava.** Iron Ledger reads your activity list (type, date, duration, distance and relative effort, including private activities) to estimate muscle fatigue and cardio volume. It only reads; it never posts or changes anything on Strava. Activity data stays in your own account and is deleted when you disconnect or delete your account.
 
-**Garmin.** Garmin has no public API for individual apps, so Garmin data comes in through a script you run on your own computer (`connectors/garmin`, written with a connector key from Library → Connections). It is not available to most users.
+**Garmin.** Garmin has no public API for individual apps, so Garmin data comes in through a script you run on your own computer (`connectors/garmin`, written with a connector key from Settings (gear icon) → Connections). It is not available to most users.
 
 ## Development
 

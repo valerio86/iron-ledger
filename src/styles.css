@@ -284,3 +284,20 @@ form.custom input[type=text], form.custom select { width: 100%; border: 1px soli
 .setrow.done .donetxt { grid-column: span 2; font-family: var(--font-data); font-size: 15px; color: var(--muted); }
 .linkrow { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 10px; }
 .notecard:last-child { margin-top: 16px; }
+
+/* Settings gear, routine editor */
+.gear { color: var(--muted); }
+.gear[aria-pressed="true"] { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
+.rowbtns { display: flex; align-items: center; gap: 12px; flex: none; }
+.iconbtn.sm { width: 32px; height: 32px; font-size: 15px; }
+.iconbtn:disabled { opacity: .35; }
+.sb.re { display: grid; gap: 10px; }
+.re-item { border: 1px solid var(--line); border-radius: var(--r); padding: 10px 12px; display: grid; gap: 8px; background: var(--surface); }
+.re-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.re-top .rowbtns { gap: 6px; }
+.re-nums { display: flex; flex-wrap: wrap; gap: 16px; }
+.re-nums > div { display: grid; gap: 4px; }
+.re-nums .stepper { width: auto; display: inline-flex; }
+.re-nums .stepper .num { min-width: 28px; text-align: center; font-family: var(--font-data); }
+.re-range { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
+.re-range input { width: 56px; height: 38px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); text-align: center; font-family: var(--font-data); font-size: 15px; }

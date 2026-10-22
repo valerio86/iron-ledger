@@ -1288,20 +1288,19 @@ function coach(day) {
 const $ = s => document.querySelector(s);
 function render() {
   document.querySelectorAll("nav.tabs button").forEach(b => b.setAttribute("aria-selected", String(b.id === "tab-" + S.tab)));
-  $("#u-lb").setAttribute("aria-pressed", String(unit() === "lb"));
-  $("#u-kg").setAttribute("aria-pressed", String(unit() === "kg"));
+  $("#open-settings").setAttribute("aria-pressed", String(S.tab === "settings"));
   $("#banner").innerHTML = S.mode === "demo"
     ? `<div class="banner"><b>Example data.</b> This browser won't let the app save (private browsing?), so it shows three made-up weeks. Nothing here is saved.</div>`
     : S.mode === "readonly" ? `<div class="banner"><b>Read-only.</b> You can look, but changes won't be saved.</div>` : "";
   const v = $("#view");
   if (S.mode === "loading") { v.innerHTML = `<p class="muted">Loading your log…</p>`; return; }
-  const setup = needsSetup(); $("nav.tabs").hidden = setup; $("header.top .unit-toggle").hidden = setup;
+  const setup = needsSetup(); $("nav.tabs").hidden = setup; $("#open-settings").hidden = setup;
   if (setup) { v.innerHTML = renderSetup(); return; }
   const focus = document.activeElement?.id, selStart = document.activeElement?.selectionStart;
-  v.innerHTML = S.tab === "today" ? renderToday() : S.tab === "progress" ? renderProgress() : renderLibrary();
+  v.innerHTML = S.tab === "today" ? renderToday() : S.tab === "progress" ? renderProgress() : renderPlan();
   if (focus) { const el = document.getElementById(focus); if (el) { el.focus(); try { if (selStart != null) el.setSelectionRange(selStart, selStart); } catch {} } }
   if (S.tab === "progress") wireChart();
-  if (S.tab === "library") drawLinks();
+  if (S.tab === "plan") drawLinks();
 }
 
 // A details element whose open state survives re-renders (S.open, keyed by id)
@@ -1512,7 +1511,7 @@ function renderEntry(e, i, day, fatPre, actx) {
 
 /* ---------- Progress ---------- */
 // Three views so the tab isn't one long scroll: lifts (strength + history), load (volume, joints), body (Garmin)
-const PROG_VIEWS = [["lifts", "Lifts"], ["load", "Load"], ["body", "Body"]];
+const PROG_VIEWS = [["lifts", "Strength"], ["load", "Workload"], ["body", "Body"]];
 try { const v = localStorage.getItem("il-prog-view"); if (PROG_VIEWS.some(([k]) => k === v)) S.progView = v; } catch {}
 function progSeg() { return `<div class="seg" role="group" aria-label="Progress view">${PROG_VIEWS.map(([k, n]) => `<button data-act="progview" data-v="${k}" aria-pressed="${S.progView === k}">${n}</button>`).join("")}</div>`; }
 function renderProgress() {
@@ -1522,7 +1521,7 @@ function renderProgress() {
   const exIds = Object.keys(doneEx).sort((a, b) => doneEx[b] - doneEx[a]);
   S._chart = S._wchart = S._vchart = null;
   if (!exIds.length) { const ld = `${S.cardio.length ? renderMuscleBars(today) : ""}${renderJointBars(today)}`;
-    return progSeg() + (S.progView === "body" ? renderBody() : S.progView === "load" && ld ? ld : `<section class="block"><h2>Progress</h2><div class="empty"><b>No finished sets yet.</b><span class="small">Once you tick off a few sets, this page charts your estimated max and volume per lift, your weekly sets per muscle, and your training load.</span></div></section>`); }
+    return progSeg() + (S.progView === "body" ? renderBody() : S.progView === "load" && ld ? ld : `<section class="block"><h2>Progress</h2><div class="empty"><b>No finished sets yet.</b><span class="small">Once you tick off a few sets, this page charts your strength estimate and volume per lift, your weekly sets per muscle, and your training load.</span></div></section>`); }
   if (!S.progEx || !doneEx[S.progEx]) S.progEx = exIds[0];
   const ex = exById(S.progEx);
   const h = historyFor(S.progEx);
@@ -1531,7 +1530,7 @@ function renderProgress() {
   const fourAgo = h.filter(r => r.day <= addDays(today, -28)).pop();
   const fmtScore = v => ex.kind === "weight" ? toDisp(v) : Math.round(v);
   const scoreUnit = ex.kind === "weight" ? unit() : ex.kind === "time" ? "s" : "reps";
-  const metricName = ex.kind === "weight" ? "Estimated 1-rep max" : ex.kind === "time" ? "Longest hold" : "Most reps in a set";
+  const metricName = ex.kind === "weight" ? "Strength estimate (est. 1-rep max)" : ex.kind === "time" ? "Longest hold" : "Most reps in a set";
 
 
   // Weekly totals, last 10 weeks (weeks end today)
@@ -1540,7 +1539,7 @@ function renderProgress() {
   const acute = weeks[9].v, chronic = (weeks[6].v + weeks[7].v + weeks[8].v + weeks[9].v) / 4;
   const ratio = chronic ? acute / chronic : 0;
   const rCls = !chronic ? "neutral" : ratio > 1.5 ? "bad" : ratio > 1.3 || ratio < .6 ? "warn" : "good";
-  const rTxt = !chronic ? "Not enough history" : ratio > 1.5 ? "Spike" : ratio > 1.3 ? "Climbing fast" : ratio < .6 ? "Deload / detraining" : "Steady";
+  const rTxt = !chronic ? "Not enough history" : ratio > 1.5 ? "Big jump" : ratio > 1.3 ? "Climbing fast" : ratio < .6 ? "Much lighter" : "Steady";
 
   const sessions = Object.entries(S.sessions).filter(([, s]) => s.entries?.some(e => doneSets(e).length)).sort((a, b) => a[0] < b[0] ? 1 : -1).slice(0, 30);
 
@@ -1569,7 +1568,7 @@ function renderProgress() {
         <div class="stat"><div class="label">Latest</div><div class="v">${fmtScore(last.score)}<span class="small muted"> ${scoreUnit}</span></div></div>
         <div class="stat"><div class="label">${ex.kind === "weight" && latestWeight(today) ? "× bodyweight" : "vs 4 wk ago"}</div><div class="v">${ex.kind === "weight" && latestWeight(today) ? `${(best / latestWeight(today).weightLb).toFixed(2)}×` : fourAgo ? `${last.score >= fourAgo.score ? "+" : "−"}${Math.abs(Math.round((last.score / fourAgo.score - 1) * 100))}%` : "—"}</div></div>
       </div>
-      <div class="label">${metricName}${ex.kind === "weight" ? " · from your best set each session, adjusted for effort" : ""}</div>
+      <div class="label">${metricName}${ex.kind === "weight" ? " · the most you could lift once, worked out from your best set each session" : ""}</div>
       <div class="chart" id="chart1"></div>
       <div class="label">${volName}</div>
       ${volLine}
@@ -1584,13 +1583,14 @@ function renderProgress() {
     ${renderMuscleBars(today)}
     ${renderJointBars(today)}
     <section class="block">
-      <h2>Training load</h2>
+      <h2>Weekly workload</h2>
+      <p class="small muted" style="margin:0">Working sets: each ticked set, with easy ones counted as half. Jumps above about 1.5× your average are where tweaks tend to happen.</p>
       <div class="statrow">
         <div class="stat"><div class="label">This week</div><div class="v">${acute.toFixed(0)}<span class="small muted"> sets</span></div></div>
         <div class="stat"><div class="label">4-wk avg</div><div class="v">${chronic.toFixed(0)}<span class="small muted"> sets</span></div></div>
-        <div class="stat"><div class="label">Ratio</div><div class="v">${chronic ? ratio.toFixed(2) : "—"}</div><span class="pill ${rCls}">${rTxt}</span></div>
+        <div class="stat"><div class="label">vs average</div><div class="v">${chronic ? ratio.toFixed(1) + "×" : "—"}</div><span class="pill ${rCls}">${rTxt}</span></div>
       </div>
-      <div class="label">Hard sets per week · last 10 weeks</div>
+      <div class="label">Working sets per week · last 10 weeks</div>
       <div class="chart" id="chart2"></div>
       ${S.cardio.length ? `<div class="label">Cardio minutes per week (walks excluded)</div><div class="chart" id="chart3"></div>` : ""}
     </section>`;
@@ -1623,7 +1623,7 @@ function renderJointBars(today) {
   }).join("");
   return `
     <section class="block">
-      <h2>Joint load · last 7 days</h2>
+      <h2>Joint stress · last 7 days</h2>
       <p class="small muted" style="margin:0">Reps weighted by how much each exercise stresses the joint (heavier sets count more), plus runs and rows from Strava. The line marks your usual week${Object.values(jr).some(r => r.basis === "starter") ? ", or a normal week of your plan while you're still building history" : ""}. Above 1.5× is a jump your joints haven't adapted to yet.</p>
       <div class="bars">${bars}</div>
     </section>`;
@@ -1793,9 +1793,13 @@ function barChart(el, { pts, label = "sets" }) {
   svg.addEventListener("pointerleave", () => tip.hidden = true);
 }
 
-/* ---------- Library ---------- */
+/* ---------- Plan tab and Settings ---------- */
 let draft = { name: "", pattern: "push", kind: "weight", muscles: {} };
-function renderLibrary() {
+// Plan holds what shapes your training; Exercises the map and your own lifts. Settings (gear) holds units, sync and backup
+const PLAN_VIEWS = [["plan", "Your plan"], ["exercises", "Exercises"]];
+try { const v = localStorage.getItem("il-plan-view"); if (PLAN_VIEWS.some(([k]) => k === v)) S.planView = v; } catch {}
+function planSeg() { return `<div class="seg" role="group" aria-label="Plan view">${PLAN_VIEWS.map(([k, n]) => `<button data-act="planview" data-v="${k}" aria-pressed="${(S.planView || "plan") === k}">${n}</button>`).join("")}</div>`; }
+function renderPlan() {
   const rs = Object.values(S.routines).sort((a, b) => a.name.localeCompare(b.name));
   const cs = Object.values(S.custom).sort((a, b) => a.name.localeCompare(b.name));
   const sch = S.settings.schedule;
@@ -1807,7 +1811,49 @@ function renderLibrary() {
   let liftsN = 0; for (let i = 0; i <= 6; i++) if (liftedOn(addDays(t, -i))) liftsN++;
   const cardioN = cardioOn(addDays(t, -6), t).length;
   const stepper = (key, v, lo, hi, step = 1) => `<span class="stepper" style="display:inline-flex;width:auto"><button data-act="wk" data-k="${key}" data-d="${-step}" aria-label="Fewer" ${v <= lo ? "disabled" : ""}>−</button><span class="num" style="min-width:24px;text-align:center">${v}</span><button data-act="wk" data-k="${key}" data-d="${step}" aria-label="More" ${v >= hi ? "disabled" : ""}>+</button></span>`;
-  return `
+  if (S.tab === "settings") return `
+    <section class="block">
+      <h2>Settings</h2>
+      <div class="list"><div class="row"><div class="l"><b>Weights in</b><div class="small muted">Only changes what you see. Your log converts either way.</div></div>
+        <div class="unit-toggle" role="group" aria-label="Units">${["lb", "kg"].map(u => `<button type="button" data-act="unit" data-v="${u}" aria-pressed="${unit() === u}">${u}</button>`).join("")}</div></div></div>
+    </section>
+    <section class="block">
+      <h2>Connections</h2>
+      <div class="list">
+        ${[["strava", "Strava", "Runs, rides and rows add fatigue to the muscles they use."], ["garmin", "Garmin", "Readiness, sleep, HRV, Body Battery, weight and body fat."]].map(([k, n, d]) => { const c = S.conn[k];
+          const pill = c.st === "ok" ? `<span class="pill good">${c.n} ${k === "strava" ? "activities" : "days"}</span>` : c.st === "loading" ? `<span class="pill neutral">Loading</span>` : c.st === "off" ? `<span class="pill neutral">Not started</span>` : c.st === "soon" ? `<span class="pill neutral">Later</span>` : `<span class="pill ${c.st === "missing" ? "warn" : "bad"}">${c.st === "missing" ? "Waiting" : "Not connected"}</span>`;
+          return `<div class="row"><div class="l"><b>${n}</b><div class="small muted">${c.msg ? esc(c.msg) : d}</div></div>${pill}</div>`; }).join("")}
+      </div>
+      ${S.conn.garmin.st !== "ok" && MCP ? `<div class="actions" style="margin-top:0"><button class="btn" data-act="retryhealth">Look for the Garmin file again</button></div>` : ""}
+      ${renderStravaActions()}
+      ${renderConnectorKey()}
+    </section>
+    ${renderAccount()}
+    <section class="block">
+      <h2>Backup</h2>
+      <p class="small muted" style="margin:0">${window.Sync?.state.user ? "Your log is synced to your account. A backup file is still handy as an extra copy." : "Your log is saved on this device only. Download a backup now and then, or sign in above to sync it."}</p>
+      <div class="actions" style="margin-top:0"><button class="btn" data-act="export">Download backup</button><button class="btn" data-act="import">Restore from backup…</button></div>
+      <input type="file" id="importfile" accept="application/json,.json" hidden>
+    </section>
+    <p class="small muted"><a href="privacy.html" style="color:var(--accent)">Privacy</a> · <a href="https://github.com/valerio86/iron-ledger" style="color:var(--accent)">About</a> · Not medical advice.</p>`;
+  return planSeg() + (S.planView === "exercises" ? `
+    ${renderExMap()}
+    <section class="block">
+      <h2>Your exercises</h2>
+      ${cs.length ? `<div class="list">${cs.map(e => `<div class="row"><div class="l"><b>${esc(e.name)}</b><div class="small muted">${PATTERN_NAMES[e.pattern]} · ${Object.entries(e.muscles).map(([m, w]) => `${MUSCLES[m]?.n}${w < 1 ? " (½)" : ""}`).join(", ")}</div></div><button class="linkbtn" data-act="delex" data-id="${esc(e.id)}" style="color:var(--bad)">${S.confirmDel === e.id ? "Confirm delete" : "Delete"}</button></div>`).join("")}</div>` : `<p class="small muted" style="margin:0">${BUILTIN.length} common lifts are built in. Add anything else here.</p>`}
+      <form class="custom" id="customform">
+        <h3>New exercise</h3>
+        <input type="text" id="cx-name" placeholder="Name, e.g. Landmine press" value="${esc(draft.name)}" required>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          <select id="cx-pattern" aria-label="Movement pattern">${Object.entries(PATTERN_NAMES).map(([k, v]) => `<option value="${k}" ${draft.pattern === k ? "selected" : ""}>${v}</option>`).join("")}</select>
+          <select id="cx-kind" aria-label="How it's measured"><option value="weight" ${draft.kind === "weight" ? "selected" : ""}>Weight × reps</option><option value="bodyweight" ${draft.kind === "bodyweight" ? "selected" : ""}>Bodyweight reps</option><option value="time" ${draft.kind === "time" ? "selected" : ""}>Timed hold</option></select>
+        </div>
+        <div class="label">Muscles: tap once for primary, twice for secondary</div>
+        <div class="mgrid">${Object.entries(MUSCLES).map(([m, M]) => `<button type="button" data-act="cxm" data-m="${m}" data-w="${draft.muscles[m] || 0}">${M.n}</button>`).join("")}</div>
+        <button class="btn primary" type="submit">Add exercise</button>
+      </form>
+    </section>
+` : `
     <section class="block">
       <h2>Your week</h2>
       <p class="small muted" style="margin:0">No fixed days. Each morning the coach picks lift, cardio or rest from the last 7 days and how recovered you are. Lifting days are never back to back.</p>
@@ -1836,48 +1882,14 @@ function renderLibrary() {
     </section>
     <section class="block">
       <h2>Routines</h2>
-      ${rs.length ? `<div class="list">${rs.map(r => `<div class="row"><div class="l"><b>${esc(r.name)}</b><div class="small muted routine-items">${r.items.map(it => `<span>${esc(exById(it.ex).name)} ${it.sets}×${it.r}${it.rHi && it.rHi !== it.r ? `–${it.rHi}` : ""} ${helpBtn(it.ex, exById(it.ex).name)}</span>`).join("")}</div></div><button class="linkbtn" data-act="delroutine" data-id="${esc(r.id)}" style="color:var(--bad)">${S.confirmDel === r.id ? "Confirm delete" : "Delete"}</button></div>`).join("")}</div>`
-        : `<div class="empty small">No routines yet. Log a session on the Today tab, then save it as a routine here.</div>`}
+      ${rs.length ? `<div class="list">${rs.map(r => `<div class="row"><div class="l"><b>${esc(r.name)}</b><div class="small muted routine-items">${r.items.map(it => `<span>${esc(exById(it.ex).name)} ${it.sets}×${it.r}${it.rHi && it.rHi !== it.r ? `–${it.rHi}` : ""} ${helpBtn(it.ex, exById(it.ex).name)}</span>`).join("")}</div></div><div class="rowbtns"><button class="linkbtn" data-act="editroutine" data-id="${esc(r.id)}">Edit</button><button class="linkbtn" data-act="delroutine" data-id="${esc(r.id)}" style="color:var(--bad)">${S.confirmDel === r.id ? "Confirm delete" : "Delete"}</button></div></div>`).join("")}</div>`
+        : `<div class="empty small">No routines yet. Make one here, or log a workout and save it as a routine.</div>`}
       <div class="actions" style="margin-top:4px">
-        <input class="search" id="rname" placeholder="Routine name, e.g. Push A" style="flex:1;min-width:180px" value="${esc(S.rname || "")}">
-        <button class="btn" data-act="saveroutine" ${S.sessions[S.day]?.entries?.length ? "" : "disabled"}>Save ${S.day === dayKey(new Date()) ? "today" : fmtDay(S.day)} as routine</button>
+        <button class="btn primary" data-act="editroutine">+ New routine</button>
+        ${S.sessions[S.day]?.entries?.length ? `<button class="btn" data-act="routinefromday">Save ${S.day === dayKey(new Date()) ? "today's workout" : fmtDay(S.day)} as a routine</button>` : ""}
       </div>
     </section>
-    ${renderExMap()}
-    <section class="block">
-      <h2>Your exercises</h2>
-      ${cs.length ? `<div class="list">${cs.map(e => `<div class="row"><div class="l"><b>${esc(e.name)}</b><div class="small muted">${PATTERN_NAMES[e.pattern]} · ${Object.entries(e.muscles).map(([m, w]) => `${MUSCLES[m]?.n}${w < 1 ? " (½)" : ""}`).join(", ")}</div></div><button class="linkbtn" data-act="delex" data-id="${esc(e.id)}" style="color:var(--bad)">${S.confirmDel === e.id ? "Confirm delete" : "Delete"}</button></div>`).join("")}</div>` : `<p class="small muted" style="margin:0">${BUILTIN.length} common lifts are built in. Add anything else here.</p>`}
-      <form class="custom" id="customform">
-        <h3>New exercise</h3>
-        <input type="text" id="cx-name" placeholder="Name, e.g. Landmine press" value="${esc(draft.name)}" required>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-          <select id="cx-pattern" aria-label="Movement pattern">${Object.entries(PATTERN_NAMES).map(([k, v]) => `<option value="${k}" ${draft.pattern === k ? "selected" : ""}>${v}</option>`).join("")}</select>
-          <select id="cx-kind" aria-label="How it's measured"><option value="weight" ${draft.kind === "weight" ? "selected" : ""}>Weight × reps</option><option value="bodyweight" ${draft.kind === "bodyweight" ? "selected" : ""}>Bodyweight reps</option><option value="time" ${draft.kind === "time" ? "selected" : ""}>Timed hold</option></select>
-        </div>
-        <div class="label">Muscles: tap once for primary, twice for secondary</div>
-        <div class="mgrid">${Object.entries(MUSCLES).map(([m, M]) => `<button type="button" data-act="cxm" data-m="${m}" data-w="${draft.muscles[m] || 0}">${M.n}</button>`).join("")}</div>
-        <button class="btn primary" type="submit">Add exercise</button>
-      </form>
-    </section>
-    <section class="block">
-      <h2>Connections</h2>
-      <div class="list">
-        ${[["strava", "Strava", "Runs, rides and rows add fatigue to the muscles they use."], ["garmin", "Garmin", "Readiness, sleep, HRV, Body Battery, weight and body fat."]].map(([k, n, d]) => { const c = S.conn[k];
-          const pill = c.st === "ok" ? `<span class="pill good">${c.n} ${k === "strava" ? "activities" : "days"}</span>` : c.st === "loading" ? `<span class="pill neutral">Loading</span>` : c.st === "off" ? `<span class="pill neutral">Not started</span>` : c.st === "soon" ? `<span class="pill neutral">Later</span>` : `<span class="pill ${c.st === "missing" ? "warn" : "bad"}">${c.st === "missing" ? "Waiting" : "Not connected"}</span>`;
-          return `<div class="row"><div class="l"><b>${n}</b><div class="small muted">${c.msg ? esc(c.msg) : d}</div></div>${pill}</div>`; }).join("")}
-      </div>
-      ${S.conn.garmin.st !== "ok" && MCP ? `<div class="actions" style="margin-top:0"><button class="btn" data-act="retryhealth">Look for the Garmin file again</button></div>` : ""}
-      ${renderStravaActions()}
-      ${renderConnectorKey()}
-    </section>
-    ${renderAccount()}
-    <section class="block">
-      <h2>Backup</h2>
-      <p class="small muted" style="margin:0">${window.Sync?.state.user ? "Your log is synced to your account. A backup file is still handy as an extra copy." : "Your log is saved on this device only. Download a backup now and then, or sign in above to sync it."}</p>
-      <div class="actions" style="margin-top:0"><button class="btn" data-act="export">Download backup</button><button class="btn" data-act="import">Restore from backup…</button></div>
-      <input type="file" id="importfile" accept="application/json,.json" hidden>
-    </section>
-    <p class="small muted"><a href="privacy.html" style="color:var(--accent)">Privacy</a> · <a href="https://github.com/valerio86/iron-ledger" style="color:var(--accent)">About</a> · Not medical advice.</p>`;
+`);
 }
 
 /* ---------- Exercise ↔ muscle map (bipartite) ---------- */
@@ -1954,17 +1966,18 @@ function openAdd(q = "") {
   const tag = e => {
     const a = advs[e.id];
     if (!canDo(e.id)) return `<span class="pill neutral">Needs gear</span>`;
+    if (S.addFor) return "";
     if (a.lvl >= 2) return `<span class="pill bad">Not now</span>`;
     if (a.lvl === 1) return `<span class="pill warn">Caution</span>`;
     const rec = Object.entries(e.muscles).some(([m, w]) => w >= .75 && readiness(fat[m]) === "rec");
     return `<span class="pill ${rec ? "neutral" : "good"}">${rec ? "Recovering" : "Good"}</span>`;
   };
-  const why = e => advs[e.id].lvl ? `<div class="small" style="color:var(--${advs[e.id].lvl >= 2 ? "bad" : "warn"})">${esc(advs[e.id].reasons[0])}</div>` : "";
+  const why = e => advs[e.id].lvl && !S.addFor ? `<div class="small" style="color:var(--${advs[e.id].lvl >= 2 ? "bad" : "warn"})">${esc(advs[e.id].reasons[0])}</div>` : "";
   $("#sheet").innerHTML = `<div class="sheet-bg" data-act="closesheet"><div class="sheet" role="dialog" aria-label="Add exercise">
-    <div class="sh"><div style="display:flex;justify-content:space-between;align-items:center"><h2>Add exercise</h2><button class="x iconbtn" data-act="closesheet" aria-label="Close">×</button></div>
+    <div class="sh"><div style="display:flex;justify-content:space-between;align-items:center"><h2>${S.addFor ? "Add to routine" : "Add exercise"}</h2><button class="x iconbtn" data-act="closesheet" aria-label="Close">×</button></div>
     <input class="search" id="exsearch" placeholder="Search by name or muscle" value="${esc(q)}" autocomplete="off"></div>
     <div class="sb">${Object.entries(PATTERN_NAMES).filter(([k]) => groups[k]).map(([k, n]) => `<div class="label grouphdr">${n}</div>` + groups[k].map(e => `
-      <div class="exline"><button class="exrow" data-act="add" data-id="${esc(e.id)}"><div class="l"><div>${esc(e.name)}</div><div class="small muted">${Object.entries(e.muscles).filter(([, w]) => w >= .75).map(([m]) => MUSCLES[m]?.n).join(" · ")}</div>${why(e)}</div>${tag(e)}</button>${helpBtn(e.id, e.name)}</div>`).join("")).join("") || `<p class="muted">No match. Add it under Library → Your exercises.</p>`}</div>
+      <div class="exline"><button class="exrow" data-act="add" data-id="${esc(e.id)}"><div class="l"><div>${esc(e.name)}</div><div class="small muted">${Object.entries(e.muscles).filter(([, w]) => w >= .75).map(([m]) => MUSCLES[m]?.n).join(" · ")}</div>${why(e)}</div>${tag(e)}</button>${helpBtn(e.id, e.name)}</div>`).join("")).join("") || `<p class="muted">No match. Add it under Plan → Exercises.</p>`}</div>
   </div></div>`;
   const inp = $("#exsearch"); inp.focus(); inp.setSelectionRange(q.length, q.length);
   inp.oninput = () => openAdd(inp.value);
@@ -1976,7 +1989,60 @@ function openRoutines() {
     <div class="sb">${c.routineScores.map((x, i) => `<button class="exrow" data-act="routine" data-id="${esc(x.r.id)}"><div class="l"><div>${esc(x.r.name)}</div><div class="small muted">${x.r.items.map(it => esc(exById(it.ex).name)).join(" · ")}</div></div>${i === 0 ? `<span class="pill good">Best fit today</span>` : x.score < 0 ? `<span class="pill bad">Muscles tired</span>` : ""}</button>`).join("")}</div>
   </div></div>`;
 }
-function closeSheet() { $("#sheet").innerHTML = ""; }
+// Closing the exercise picker while editing a routine goes back to the editor; force closes everything
+function closeSheet(force) {
+  if (force) S.addFor = S.rEdit = null;
+  if (S.addFor === "routine") { S.addFor = null; openRoutineEditor(); return; }
+  $("#sheet").innerHTML = "";
+}
+
+/* ---------- Routine editor ---------- */
+// S.rEdit is the draft: { id (null when new), name, items: [{ ex, sets, r, rHi, w }] }
+function editRoutine(id) {
+  const r = id && S.routines[id];
+  S.rEdit = r ? { id, name: r.name, items: r.items.map(it => ({ ...it })) } : { id: null, name: "", items: [] };
+  openRoutineEditor();
+}
+function routineFromDay() {
+  const s = S.sessions[S.day];
+  S.rEdit = { id: null, name: "", items: s.entries.map(e => ({ ex: e.ex, sets: e.sets.length, r: e.rLo || e.sets[0]?.r || 8, ...(e.rHi ? { rHi: e.rHi } : {}), w: e.sets[0]?.w || 0 })) };
+  openRoutineEditor();
+}
+function openRoutineEditor() {
+  const R = S.rEdit, n = R.items.length;
+  const items = R.items.map((it, k) => { const ex = exById(it.ex), u = ex.kind === "time" ? "Seconds" : "Reps";
+    return `<div class="re-item">
+      <div class="re-top"><div><b>${esc(ex.name)}</b> ${helpBtn(it.ex, ex.name)}</div>
+        <div class="rowbtns"><button class="iconbtn sm" data-act="re-move" data-k="${k}" data-d="-1" aria-label="Move ${esc(ex.name)} up" ${k ? "" : "disabled"}>↑</button><button class="iconbtn sm" data-act="re-move" data-k="${k}" data-d="1" aria-label="Move ${esc(ex.name)} down" ${k < n - 1 ? "" : "disabled"}>↓</button><button class="iconbtn sm" data-act="re-rm" data-k="${k}" aria-label="Remove ${esc(ex.name)}">×</button></div></div>
+      <div class="re-nums">
+        <div><span class="label">Sets</span><span class="stepper"><button data-act="re-sets" data-k="${k}" data-d="-1" aria-label="Fewer sets" ${it.sets > 1 ? "" : "disabled"}>−</button><span class="num">${it.sets}</span><button data-act="re-sets" data-k="${k}" data-d="1" aria-label="More sets" ${it.sets < 10 ? "" : "disabled"}>+</button></span></div>
+        <div><span class="label">${u}</span><span class="re-range"><input id="re-r-${k}" data-re="r" data-k="${k}" inputmode="numeric" value="${it.r}" aria-label="${u}, lowest"><span>to</span><input id="re-rhi-${k}" data-re="rHi" data-k="${k}" inputmode="numeric" value="${it.rHi && it.rHi !== it.r ? it.rHi : ""}" placeholder="—" aria-label="${u}, highest (optional)"></span></div>
+      </div></div>`; }).join("");
+  $("#sheet").innerHTML = `<div class="sheet-bg" data-act="closesheet"><div class="sheet" role="dialog" aria-label="${R.id ? "Edit routine" : "New routine"}">
+    <div class="sh"><div style="display:flex;justify-content:space-between;align-items:center"><h2>${R.id ? "Edit routine" : "New routine"}</h2><button class="x iconbtn" data-act="closesheet" aria-label="Close">×</button></div>
+    <input class="search" id="re-name" placeholder="Name, e.g. Upper A" value="${esc(R.name)}" autocomplete="off"></div>
+    <div class="sb re">
+      ${items || `<p class="small muted" style="margin:0">No exercises yet. Add them in the order you'll do them.</p>`}
+      <p class="small muted" style="margin:0">A rep range (say 8 to 12) lets the coach add reps first, then weight once you reach the top of the range. The starting weight comes from your last session.</p>
+      <div class="actions" style="margin-top:0"><button class="btn" data-act="re-add">+ Add exercise</button><button class="btn primary" data-act="re-save">Save routine</button></div>
+    </div>
+  </div></div>`;
+  $("#re-name").oninput = ev => { R.name = ev.target.value; };
+}
+async function saveRoutine() {
+  const R = S.rEdit, name = R.name.trim();
+  if (!name) { toast("Give the routine a name first"); $("#re-name").focus(); return; }
+  if (!R.items.length) { toast("Add at least one exercise"); return; }
+  let id = R.id;
+  if (!id) { id = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || uid(); if (S.routines[id]) id += "-" + uid().slice(0, 4); }
+  const items = R.items.map(({ rHi, ...it }) => rHi > it.r ? { ...it, rHi } : it);
+  const { id: _, ...prev } = S.routines[id] || {};
+  const doc = { ...prev, name, items };
+  S.routines[id] = { ...doc, id };
+  const wk = S.settings.week;
+  if (!R.id && wk?.rotation) { S.settings = { ...S.settings, week: { ...wk, rotation: [...wk.rotation, id] } }; saveDoc("settings/main", S.settings); }
+  closeSheet(true); render(); await saveDoc("routines/" + id, doc); toast(`Saved ${name}`);
+}
 
 /* ---------- Exercise guide panel ---------- */
 function helpBtn(exId, name) { return `<button class="help" data-act="help" data-id="${esc(exId)}" aria-label="How to do ${esc(name)}">?</button>`; }
@@ -1996,7 +2062,7 @@ function openHelp(exId) {
       ${g ? `${sec("Setup", g.s)}${sec("The rep", g.r, "steps")}${sec("Posture cues", g.c, "cues")}${sec("Common mistakes", g.m, "mistakes")}`
           : `<p class="muted">This is one of your own exercises, so there's no write-up for it. General rules: brace your abs before each rep, move through a full range you can control, and lower the weight more slowly than you lift it.</p>`}
       <p class="hint warn" style="margin-top:14px">${GUIDE_ALWAYS}</p>
-      ${missingFor(exId).length ? `<p class="hint info">Needs ${esc(missingFor(exId).join(" and "))}, which isn't in your equipment list (Library) yet.</p>` : ""}
+      ${missingFor(exId).length ? `<p class="hint info">Needs ${esc(missingFor(exId).join(" and "))}, which isn't in your equipment list (Plan tab) yet.</p>` : ""}
       <p class="small muted">${hist}</p>
     </div></div></div>`;
   $("#help .x").focus();
@@ -2049,10 +2115,13 @@ document.addEventListener("click", async ev => {
     }
     case "bppat": S.libPat = b.dataset.v; render(); break;
     case "bpclear": S.libSel = null; render(); break;
+    case "planview": S.planView = b.dataset.v; try { localStorage.setItem("il-plan-view", S.planView); } catch {} render(); break;
+    case "unit": if (S.settings.unit !== b.dataset.v) { S.settings = { ...S.settings, unit: b.dataset.v }; render(); await saveDoc("settings/main", S.settings); } break;
     case "progview": S.progView = b.dataset.v; try { localStorage.setItem("il-prog-view", S.progView); } catch {} render(); break;
     case "openroutines": openRoutines(); break;
     case "closesheet": closeSheet(); break;
-    case "add": closeSheet(); mutate(s => { s.entries.push(newEntry(b.dataset.id, S.day)); s.finished = false; }); toast(`Added ${exById(b.dataset.id).name}`); break;
+    case "add": if (S.addFor === "routine") { const ex = exById(b.dataset.id); S.addFor = null; S.rEdit.items.push({ ex: ex.id, sets: 3, r: ex.kind === "time" ? 30 : 8, ...(ex.kind === "time" ? {} : { rHi: 12 }), w: 0 }); openRoutineEditor(); break; }
+      closeSheet(); mutate(s => { s.entries.push(newEntry(b.dataset.id, S.day)); s.finished = false; }); toast(`Added ${exById(b.dataset.id).name}`); break;
     case "routine": {
       const r = S.routines[b.dataset.id], trim = trimReason(S.day), plan = b.dataset.raw ? { items: r.items, changes: [] } : adaptRoutine(r, S.day); closeSheet();
       mutate(s => { if (trim) s.trim = trim; for (const it of plan.items) { const e = newEntry(it.ex, S.day); const p = progression(it.ex, S.day);
@@ -2091,12 +2160,13 @@ document.addEventListener("click", async ev => {
     }
     case "retryhealth": try { localStorage.removeItem("il-health-file"); } catch {} loadHealth(); render(); break;
     case "goto": S.day = b.dataset.day; S.tab = "today"; render(); window.scrollTo(0, 0); break;
-    case "saveroutine": {
-      const name = ($("#rname").value || "").trim(); if (!name) { toast("Give the routine a name first"); $("#rname").focus(); return; }
-      const s = S.sessions[S.day]; const id = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || uid();
-      const r = { name, items: s.entries.map(e => ({ ex: e.ex, sets: e.sets.length, r: e.sets[0]?.r || 8, w: e.sets[0]?.w || 0 })) };
-      S.routines[id] = { ...r, id }; S.rname = ""; await saveDoc("routines/" + id, r); render(); toast(`Saved ${name}`); break;
-    }
+    case "editroutine": editRoutine(b.dataset.id); break;
+    case "routinefromday": routineFromDay(); break;
+    case "re-add": S.addFor = "routine"; openAdd(); break;
+    case "re-save": saveRoutine(); break;
+    case "re-rm": S.rEdit.items.splice(+b.dataset.k, 1); openRoutineEditor(); break;
+    case "re-move": { const its = S.rEdit.items, k = +b.dataset.k, t = k + +b.dataset.d; [its[k], its[t]] = [its[t], its[k]]; openRoutineEditor(); break; }
+    case "re-sets": { const it = S.rEdit.items[+b.dataset.k]; it.sets = Math.min(10, Math.max(1, it.sets + +b.dataset.d)); openRoutineEditor(); break; }
     case "delroutine": case "delex": {
       const id = b.dataset.id;
       if (S.confirmDel !== id) { S.confirmDel = id; render(); return; }
@@ -2117,10 +2187,8 @@ document.addEventListener("click", async ev => {
   }
   if (b.closest("nav.tabs")) return;
 });
-document.querySelectorAll("nav.tabs button").forEach(b => b.addEventListener("click", () => { S.tab = b.id.slice(4); closeSheet(); render(); window.scrollTo(0, 0); }));
-["lb", "kg"].forEach(u => $("#u-" + u).addEventListener("click", async () => {
-  if (S.settings.unit === u) return; S.settings = { ...S.settings, unit: u }; render(); await saveDoc("settings/main", S.settings);
-}));
+document.querySelectorAll("nav.tabs button").forEach(b => b.addEventListener("click", () => { S.tab = b.id.slice(4); closeSheet(true); render(); window.scrollTo(0, 0); }));
+$("#open-settings").addEventListener("click", () => { S.tab = "settings"; closeSheet(true); render(); window.scrollTo(0, 0); });
 document.addEventListener("change", ev => {
   const t = ev.target;
   if (t.dataset.act === "w" || t.dataset.act === "r") {
@@ -2131,6 +2199,8 @@ document.addEventListener("change", ev => {
       for (let n = j + 1; n < sets.length; n++) if (!sets[n].done && sets[n][k] === old) sets[n][k] = sets[j][k]; });
   }
   if (t.id === "progex") { S.progEx = t.value; render(); }
+  if (t.dataset.re && S.rEdit) { const it = S.rEdit.items[+t.dataset.k], v = parseInt(t.value) || 0;
+    if (t.dataset.re === "r") it.r = Math.max(1, v); else if (v > 0) it.rHi = v; else delete it.rHi; }
   if (t.id?.startsWith("eqmax-")) {
     const k = t.id.slice(6), e = equip();
     S.settings = { ...S.settings, equip: { have: e.have, max: { ...e.max, [k]: t.value.trim() === "" ? 0 : fromDisp(t.value) } } };
@@ -2148,7 +2218,7 @@ document.addEventListener("input", ev => {
     saveDay(S.day);
     clearTimeout(noteTimer); noteTimer = setTimeout(render, 700);   // re-plan once typing pauses
     return;
-  } if (ev.target.id === "cx-name") draft.name = ev.target.value; if (ev.target.id === "rname") S.rname = ev.target.value; });
+  } if (ev.target.id === "cx-name") draft.name = ev.target.value; });
 document.addEventListener("toggle", ev => { if (ev.target.matches?.("details.fold[id]")) S.open[ev.target.id] = ev.target.open; }, true);
 document.addEventListener("submit", async ev => {
   if (ev.target.id !== "customform") return; ev.preventDefault();
@@ -2162,7 +2232,7 @@ document.addEventListener("submit", async ev => {
 });
 // The map's muscle column is sticky, so its links are redrawn as the page scrolls or resizes
 let linkFrame = 0;
-const queueLinks = () => { if (S.tab !== "library" || linkFrame) return; linkFrame = requestAnimationFrame(() => { linkFrame = 0; drawLinks(); }); };
+const queueLinks = () => { if (S.tab !== "plan" || linkFrame) return; linkFrame = requestAnimationFrame(() => { linkFrame = 0; drawLinks(); }); };
 window.addEventListener("scroll", queueLinks, { passive: true });
 window.addEventListener("resize", queueLinks);
 document.fonts?.ready.then(queueLinks);

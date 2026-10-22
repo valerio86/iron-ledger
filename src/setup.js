@@ -122,9 +122,9 @@ function renderSetup() {
     const saved = S.settings; S.settings = { ...S.settings, equip: { have: d.have, max: {} } };
     const rs = buildRoutines(d.tpl); S.settings = saved;
     return `<div class="list">${Object.values(rs).map(r => `<div class="row"><div class="l"><b>${esc(r.name)}</b><div class="small muted">${r.items.map(it => esc(exById(it.ex).name)).join(" · ")}</div></div></div>`).join("")}</div>`;
-  })() : `<p class="small muted" style="margin:0">Log a session on the Today tab, then save it as a routine in Library.</p>`;
+  })() : `<p class="small muted" style="margin:0">Log a session on the Today tab, or make a routine on the Plan tab.</p>`;
   return `
-    <p style="margin:4px 0 0;max-width:52ch">A lifting log with a coach that watches your weekly volume, recovery and joints, and picks what to do each day. A few questions to set it up. You can change all of it later in Library.</p>
+    <p style="margin:4px 0 0;max-width:52ch">A lifting log with a coach that watches your weekly volume, recovery and joints, and picks what to do each day. A few questions to set it up. You can change all of it later on the Plan tab.</p>
     ${q("1 of 6", "Units", "", `<div class="suggest">${chip("ob-unit", "lb", u === "lb", "Pounds (lb)")}${chip("ob-unit", "kg", u === "kg", "Kilograms (kg)")}</div>`)}
     ${q("2 of 6", "Bodyweight", "Used for bodyweight exercises and calorie targets. Log weigh-ins later from the Today tab.",
       `<label class="eqmax" for="ob-bw"><span>Today</span><span class="stepper" style="display:inline-flex;width:auto"><input id="ob-bw" inputmode="decimal" value="${esc(d.bw)}" placeholder="${u === "kg" ? "70" : "155"}" style="width:80px"><span class="u">${u}</span></span></label>`)}
@@ -330,7 +330,7 @@ function stravaConnect() {
   else if (q.get("state") !== expected) S.stravaErr = "Connect Strava again from this same browser tab.";
   else if (!/activity:read/.test(q.get("scope") || "")) S.stravaErr = "Strava needs “View data about your activities” ticked. Connect again.";
   else S.stravaPending = { code: q.get("code"), scope: q.get("scope") };
-  if (q.get("error") || S.stravaErr) S.tab = "library";
+  if (q.get("error") || S.stravaErr) S.tab = "settings";
 })();
 async function stravaSync(force = false) {
   if (!stravaReady() || !window.Sync?.state.user || !DB) return;

@@ -2,7 +2,7 @@
 /* First-run setup, starter routines, and manual cardio / weigh-ins (what Strava and Garmin supplied in the artifact).
    Loaded after app.js (its boot() awaits IndexedDB, so this file runs before the first real render). */
 
-/* ============================== Manual log: body/<day> { weightLb?, cardio: [{ id, sport, mins, effort }] } ============================== */
+/* ============================== Manual log: body/<day> { weightLb?, cardio: [{ id, sport, mins, effort, re? }] } (re: imported Strava relative effort) ============================== */
 const CARDIO_TYPES = { Run: "Run", Ride: "Bike", Rowing: "Row", Swim: "Swim", Hike: "Hike", Elliptical: "Elliptical", StairStepper: "Stairs", NordicSki: "Ski", Walk: "Walk" };
 const LOW_IMPACT = ["Ride", "Rowing", "Swim", "Elliptical"];
 // Relative-effort points per minute, roughly what Strava gives for each effort (30 min easy ≈ 25)
@@ -16,7 +16,7 @@ function rebuildDerived() {
   for (const [day, b] of Object.entries(S.body)) {
     if (b.weightLb) health[day] = { ...(health[day] || {}), weightLb: b.weightLb };
     (b.cardio || []).forEach((c, i) => manual.push({ id: c.id, name: CARDIO_TYPES[c.sport] || c.sport, sport: c.sport, day,
-      t: parseDay(day).getTime() + (6 + i) * 36e5, mins: c.mins, km: 0, re: Math.round(c.mins * (CARDIO_EFFORT[c.effort]?.re || 1)), muscles: CARDIO[c.sport] || {}, manual: true }));
+      t: parseDay(day).getTime() + (6 + i) * 36e5, mins: c.mins, km: 0, re: c.re ?? Math.round(c.mins * (CARDIO_EFFORT[c.effort]?.re || 1)), muscles: CARDIO[c.sport] || {}, manual: true }));
   }
   S.cardio = [...S.extCardio, ...manual];
   S.health = health;

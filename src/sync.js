@@ -14,6 +14,8 @@ const AUTH_MSG = {
   "auth/email-already-in-use": "There's already an account with that email. Sign in instead.", "auth/weak-password": "Use at least 6 characters.",
   "auth/invalid-email": "That email doesn't look right.", "auth/too-many-requests": "Too many tries. Wait a few minutes.",
   "auth/popup-closed-by-user": "Sign-in window closed.", "auth/popup-blocked": "The browser blocked the sign-in window. Allow pop-ups and try again.",
+  "auth/configuration-not-found": "Sign-in isn't switched on for this app yet.", "auth/operation-not-allowed": "That sign-in method isn't switched on yet.",
+  "auth/unauthorized-domain": "Sign-in isn't allowed from this web address yet.",
   "auth/network-request-failed": "No connection. Try again when you're online.", "auth/requires-recent-login": "For safety, sign out and back in, then try again.",
 };
 const friendly = e => AUTH_MSG[e?.code] || e?.message || "Something went wrong.";

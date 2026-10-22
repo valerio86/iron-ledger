@@ -623,7 +623,7 @@ async function boot() {
   startConnectors();
   if (!db) { S.mode = "demo"; loadDemo(); render(); return; }
   DB = db; S.mode = "live";
-  let pending = 4;
+  let pending = 5;
   const ready = () => { if (pending > 0 && --pending === 0) render(); else if (pending <= 0) render(); };
   db.collection("sessions").onSnapshot(snap => {
     for (const ch of snap.docChanges()) {
@@ -636,6 +636,7 @@ async function boot() {
   }, onDbErr);
   db.collection("exercises").onSnapshot(snap => { S.custom = {}; snap.docs.forEach(d => S.custom[d.id] = { ...structuredClone(d.data()), id: d.id }); ready(); }, onDbErr);
   db.collection("routines").onSnapshot(snap => { S.routines = {}; snap.docs.forEach(d => S.routines[d.id] = { ...structuredClone(d.data()), id: d.id }); ready(); }, onDbErr);
+  db.collection("body").onSnapshot(snap => { S.body = {}; snap.docs.forEach(d => S.body[d.id] = structuredClone(d.data())); rebuildDerived(); ready(); }, onDbErr);
   db.doc("settings/main").onSnapshot(d => { if (d.exists) S.settings = { unit: "lb", ...d.data() }; ready(); }, onDbErr);
 }
 /* ============================== Connectors (Strava, Garmin via Drive) ============================== */
@@ -651,7 +652,7 @@ function connError(key, server, e) {
   const fix = CONN_FIX[e?.code];
   const transient = !fix && (e?.retryable || e?.code === "server_unavailable");
   S.conn[key] = { ...S.conn[key], st: fix ? "blocked" : "error", msg: fix ? fix(server) : transient ? `${server} didn't answer. It will try again shortly.` : `${server}: ${e?.message || "request failed"}` };
-  if (fix) { if (key === "strava") S.cardio = []; else S.health = {}; }
+  if (fix) { if (key === "strava") S.extCardio = []; else S.extHealth = {}; rebuildDerived(); }
   render();
 }
 async function startConnectors() {
@@ -663,12 +664,13 @@ async function startConnectors() {
   MCP.watchTool(STRAVA, "list_activities", { first: 100, range_start: dayKey(since) + "T00:00:00" }, ev => {
     if (ev.type === "error") return connError("strava", STRAVA, ev.error);
     const acts = ev.result.payload?.activities || [];
-    S.cardio = acts.map(a => {
+    S.extCardio = acts.map(a => {
       const d = new Date(a.start_local), re = a.summary?.relative_effort || 0;
       return { id: a.id, name: a.name, sport: a.sport_type, day: dayKey(d), t: d.getTime() + (a.summary?.elapsed_time || 0) * 1000,
         mins: Math.round((a.summary?.moving_time || 0) / 60), km: (a.summary?.distance || 0) / 1000, re, muscles: CARDIO[a.sport_type] || {} };
     });
-    S.conn.strava = { st: "ok", at: ev.result.cache?.storedAt || Date.now(), n: S.cardio.length };
+    S.conn.strava = { st: "ok", at: ev.result.cache?.storedAt || Date.now(), n: S.extCardio.length };
+    rebuildDerived();
     render();
   }, { refetchInterval: 30 * 60e3, cache: { staleTime: 5 * 60e3 } });
   loadHealth();
@@ -708,8 +710,8 @@ async function loadHealth() {
     }
     const j = findJson(ev.result.payload);
     if (!j) { S.conn.garmin = { st: "error", msg: "Found the Garmin file but couldn't read it." }; render(); return; }
-    S.health = j.days || {};
-    S.conn.garmin = { st: "ok", at: Date.parse(j.updated) || ev.result.cache?.storedAt || Date.now(), n: Object.keys(S.health).length };
+    S.extHealth = j.days || {}; rebuildDerived();
+    S.conn.garmin = { st: "ok", at: Date.parse(j.updated) || ev.result.cache?.storedAt || Date.now(), n: Object.keys(S.extHealth).length };
     render();
   }, { refetchInterval: 60 * 60e3, cache: { staleTime: 10 * 60e3 } });
 }
@@ -835,7 +837,7 @@ function progression(exId, beforeDay) {
 }
 
 /* Flexible week: pick today's session from the rolling last 7 days + recovery, instead of fixed weekdays */
-const WEEK_DEFAULT = { lifts: 3, cardio: 3, cardioMin: 110 };   // ~110 min = the plan's erg + recovery run + long Zone 2
+const WEEK_DEFAULT = { lifts: 3, cardio: 3, cardioMin: 110 };   // used only when settings.week is missing (setup always writes it)
 function z2Text() { const z = S.settings.hrZ2; return z ? `, heart rate ${z.lo}–${z.hi} bpm` : ""; }
 // Low readiness or a "tired" note → routines start one set lighter per exercise, at held weights
 function trimReason(day) {
@@ -844,6 +846,8 @@ function trimReason(day) {
   if (activeIssues(day).some(i => i.k === "general:tired")) return "you noted feeling tired";
   return null;
 }
+// First ~2 weeks: run the starter routines as written, without top-up exercises or cardio add-ons
+function isNewcomer(day) { return Object.keys(S.sessions).filter(k => k < day && liftedOn(k)).length < 6; }
 function liftedOn(day) { return !!S.sessions[day]?.entries?.some(e => doneSets(e).length); }
 function cardioOn(fromDay, toDay) { return S.cardio.filter(a => a.day >= fromDay && a.day <= toDay && !CARDIO_SPORTS_EXCL.has(a.sport) && a.mins >= 15).sort((a, b) => a.t - b.t); }
 function routineOf(day) {
@@ -895,7 +899,7 @@ function weightTrend(from, to) {
 }
 function fuel(day) {
   const N = nutri(), G = GOALS[N.goal], bw = bwLb(day);
-  const kcal = N.kcal || round50(bw * KCAL_PER_LB + G.add);
+  const kcal = N.kcal || round50(bw * (S.settings.nutrition?.perLb || KCAL_PER_LB) + G.add);
   const prot = Math.round(bw * G.prot / 5) * 5;
   const last = N.changes.filter(c => c.day <= day).pop();
   // After a change, skip 4 days: water and food in the gut move the scale before muscle or fat does
@@ -939,10 +943,10 @@ function planDay(day) {
   const poor = h.readiness != null ? h.readiness < 25 : /POOR/i.test(h.hrvStatus || "");
   const low = h.readiness != null && h.readiness < 50;
   const cardioPick = () => {
-    if (tr.hrvDown || tr.rhrUp) return { kind: "cardio", mins: 25, title: "Short easy cardio, or rest", note: `20–30 min, conversational${z2Text()}. Recovery is dipping, and your plan says to cut cardio before lifting.` };
-    if (!cardio.some(a => a.mins >= 45)) { const m = Math.max(45, perSess); return { kind: "cardio", mins: m, title: "Long Zone 2, erg or run", note: `${m}–${m + 15} min, easy enough to hold a conversation${z2Text()}.` }; }
-    if (/Row/.test(cardio[cardio.length - 1]?.sport || "")) { const m = Math.min(35, perSess); return { kind: "cardio", mins: m, title: "Slow recovery run", note: `${m} min, conversational pace${z2Text()}.` }; }
-    return { kind: "cardio", mins: perSess, title: "Zone 2 erg, easy", note: `${perSess} min${z2Text()}.` };
+    if (tr.hrvDown || tr.rhrUp) return { kind: "cardio", mins: 25, title: "Short easy cardio, or rest", note: `20–30 min, conversational${z2Text()}. Recovery is dipping, and cardio is the first thing to cut, before lifting.` };
+    if (!cardio.some(a => a.mins >= 45)) { const m = Math.max(45, perSess); return { kind: "cardio", mins: m, title: `Long Zone 2: ${cardioWords()}`, note: `${m}–${m + 15} min, easy enough to hold a conversation${z2Text()}.` }; }
+    if (cardioTypes().includes("Run") && cardioTypes().length > 1 && !/Run/.test(cardio[cardio.length - 1]?.sport || "")) { const m = Math.min(35, perSess); return { kind: "cardio", mins: m, title: "Slow recovery run", note: `${m} min, conversational pace${z2Text()}.` }; }
+    return { kind: "cardio", mins: perSess, title: `Easy Zone 2: ${cardioWords()}`, note: `${perSess} min${z2Text()}.` };
   };
   const tiredIn = r => [...new Set(r.items.flatMap(it => Object.entries(exById(it.ex).muscles).filter(([m, w]) => w >= 1 && readiness(fat[m]) === "fat").map(([m]) => m)))];
   // Noted aches: count exercises in a routine that are "not now" because of a joint
@@ -956,8 +960,8 @@ function planDay(day) {
   const cardioPick0 = cardioPick;
   const cardioPickSafe = () => {
     const c = cardioPick0();
-    if (legsHurt && /run/i.test(c.title)) return { kind: "cardio", mins: c.mins, title: "Zone 2 erg, easy", note: c.mins + " min. Swapped from a run to spare your " + jointIssues.filter(i => ["knee", "ankle", "hip"].includes(i.k.slice(6))).map(i => JOINT_NAMES[i.k.slice(6)]).join("/") + "." };
-    if (backHurts && /erg/i.test(c.title)) return { kind: "cardio", mins: c.mins, title: "Easy walk or bike", note: c.mins + " min. Rowing loads the lower back; skip it until it settles." };
+    if (legsHurt && /run/i.test(c.title)) return { kind: "cardio", mins: c.mins, title: `Easy Zone 2: ${lowImpactWords()}`, note: c.mins + " min. Swapped from a run to spare your " + jointIssues.filter(i => ["knee", "ankle", "hip"].includes(i.k.slice(6))).map(i => JOINT_NAMES[i.k.slice(6)]).join("/") + "." };
+    if (backHurts && /\brow\b/i.test(c.title)) return { kind: "cardio", mins: c.mins, title: "Easy walk or bike", note: c.mins + " min. Rowing loads the lower back; skip it until it settles." };
     return c;
   };
   const lastR = lastLift && routineOf(lastLift);
@@ -986,9 +990,9 @@ function planDay(day) {
         : h.readiness >= 75 ? "You're well recovered. Good day to push the top of your rep ranges." : "" };
       p.trim = trimReason(day);
       // Well behind on cardio minutes and recovering fine → stack a short easy session after lifting
-      if (minsDone < minsT * .6 && !tr.hrvDown && !tr.rhrUp && !low && !tiredNote) {
+      if (minsDone < minsT * .6 && !isNewcomer(day) && !tr.hrvDown && !tr.rhrUp && !low && !tiredNote) {
         const m = Math.min(25, Math.max(15, Math.round((minsT - minsDone) / 3 / 5) * 5));
-        p.addon = { mins: m, text: `${m} min easy bike or erg after lifting${z2Text()}. You're at ${minsDone} of ${minsT} cardio minutes this week.` };
+        p.addon = { mins: m, text: `${m} min easy ${lowImpactWords()} after lifting${z2Text()}. You're at ${minsDone} of ${minsT} cardio minutes this week.` };
       }
       if (pick !== order[0]) {
         const r0 = order[0], b0 = blockedIn(r0), t0 = tiredIn(r0);
@@ -1033,7 +1037,7 @@ function adaptRoutine(r, day) {
   }
   // 3. Top up to two fresh muscles your routines under-cover across a week, minus extra work already done this week
   //    (structural gaps, so a lower day doesn't fill in for the upper day that's coming anyway). Not on a lighter day.
-  if (!trimReason(day)) {
+  if (!trimReason(day) && !isNewcomer(day)) {
     const base = r.items.reduce((a, it) => a + it.sets, 0);
     let total = items.reduce((a, x) => a + x.sets, 0), added = 0;
     const used = {}; for (const x of allDoneSets()) used[x.ex.id] = (used[x.ex.id] || 0) + 1;
@@ -1075,7 +1079,8 @@ function forecast(day, n) {
   const saved = {}, savedCardio = S.cardio, out = [];
   S.cardio = [...S.cardio];
   const fakeCardio = (k, title, mins) => {
-    const sport = /run/i.test(title) ? "Run" : /bike|walk/i.test(title) ? "Ride" : "Rowing";
+    // first of your cardio types the plan's title mentions, e.g. "Easy Zone 2: run or bike" → Run
+    const sport = cardioTypes().find(t => new RegExp(`\\b${(CARDIO_TYPES[t] || t).toLowerCase()}`, "i").test(title)) || cardioTypes()[0];
     S.cardio.push({ id: "sim-" + k, name: title, sport, day: k, t: parseDay(k).getTime() + 6 * 36e5, mins, km: 0, re: Math.round(mins * .8), muscles: CARDIO[sport] || {} });
   };
   try {
@@ -1086,7 +1091,7 @@ function forecast(day, n) {
         if (!(k in saved)) saved[k] = S.sessions[k];
         S.sessions[k] = { date: k, routine: p.routine.id, entries: p.routine.items.map(it => ({ ex: it.ex, effort: "solid",
           sets: Array.from({ length: it.sets }, () => ({ w: it.w || 0, r: it.r, done: true, t: parseDay(k).getTime() })) })) };
-        if (p.addon) fakeCardio(k, "Easy erg", p.addon.mins);
+        if (p.addon) fakeCardio(k, lowImpactWords(), p.addon.mins);
       } else if (p.kind === "cardio") fakeCardio(k, p.title, p.mins || 30);
     }
   } finally {
@@ -1289,6 +1294,8 @@ function render() {
     : S.mode === "readonly" ? `<div class="banner"><b>Read-only.</b> You can look, but changes won't be saved.</div>` : "";
   const v = $("#view");
   if (S.mode === "loading") { v.innerHTML = `<p class="muted">Loading your log…</p>`; return; }
+  const setup = needsSetup(); $("nav.tabs").hidden = setup; $("header.top .unit-toggle").hidden = setup;
+  if (setup) { v.innerHTML = renderSetup(); return; }
   const focus = document.activeElement?.id, selStart = document.activeElement?.selectionStart;
   v.innerHTML = S.tab === "today" ? renderToday() : S.tab === "progress" ? renderProgress() : renderLibrary();
   if (focus) { const el = document.getElementById(focus); if (el) { el.focus(); try { if (selStart != null) el.setSelectionRange(selStart, selStart); } catch {} } }
@@ -1386,6 +1393,8 @@ function renderToday() {
     <div class="entries">${entries || `<div class="empty"><b>Nothing logged ${day === today ? "yet today" : "on this day"}.</b><span class="small">Start a routine, or add exercises one at a time. Tick each set as you finish it. Only ticked sets count.</span></div>`}</div>
     <div class="actions">
       <button class="btn primary" data-act="openadd">+ Add exercise</button>
+      <button class="btn" data-act="cl-open">+ Cardio</button>
+      <button class="btn" data-act="wt-open">Weigh-in</button>
       ${Object.keys(S.routines).length ? `<button class="btn" data-act="openroutines">Start routine</button>` : ""}
       ${total ? `<button class="btn ${s.finished ? "ghost" : ""}" data-act="finish">${s.finished ? "Reopen day" : "Finish day"}</button>` : ""}
     </div>`;
@@ -1429,6 +1438,7 @@ function renderEntry(e, i, day, fatPre, actx) {
       <div class="eh"><div><div class="nm">${esc(ex.name)} ${helpBtn(e.ex, ex.name)}</div><div class="sub">${prim}${e.rHi ? ` · target ${e.rLo}–${e.rHi}${ex.kind === "time" ? "s" : " reps"}` : ""}</div></div>
         <button class="x" data-act="rm" data-i="${i}" aria-label="Remove ${esc(ex.name)}">×</button></div>
       ${adv.lvl ? `<div class="hint ${adv.lvl >= 2 ? "bad" : "warn"}"><b>${adv.lvl >= 2 ? "Not the best right now" : "Careful"}:</b> ${esc(adv.reasons.join("; "))}.${adv.alts.length ? `<div class="swaps">Swap for: ${adv.alts.map(a => `<button class="chipbtn" data-act="swap" data-i="${i}" data-id="${esc(a.id)}">${esc(a.name)}</button>`).join("")}</div>` : ""}</div>` : ""}
+      ${!prog && ex.kind === "weight" && !e.sets.some(s => s.done || s.w) ? `<div class="hint info">First time: pick a weight you could lift 2–3 more reps than the target with good form. Go lighter if unsure; the coach takes it from there.</div>` : ""}
       ${prog && !e.sets.some(s => s.done) ? `<div class="hint ${prog.bump < 0 ? "warn" : "info"}">${prog.text}${hold ? ` Not today though: ${esc(S.sessions[day].trim)}, so hold the weight.` : ""}${prog.bump && !hold ? ` <button class="linkbtn" data-act="bump" data-i="${i}" data-n="${prog.bump}">Apply</button>` : ""}</div>` : ""}
       <div class="setrow small muted" aria-hidden="true"><span></span><span class="label">${ex.kind === "time" ? "" : ex.kind === "bodyweight" ? "Added load" : "Weight"}</span><span class="label">${ex.kind === "time" ? "Seconds" : "Reps"}</span><span></span></div>
       ${rows}
@@ -1523,7 +1533,7 @@ function renderProgress() {
       </div>
       <div class="label">Hard sets per week · last 10 weeks</div>
       <div class="chart" id="chart2"></div>
-      ${S.cardio.length ? `<div class="label">Cardio minutes per week (Strava, walks excluded)</div><div class="chart" id="chart3"></div>` : ""}
+      ${S.cardio.length ? `<div class="label">Cardio minutes per week (walks excluded)</div><div class="chart" id="chart3"></div>` : ""}
     </section>`;
   return progSeg() + (S.progView === "load" ? load : S.progView === "body" ? renderBody() : lifts);
 }
@@ -1744,8 +1754,9 @@ function renderLibrary() {
       <p class="small muted" style="margin:0">No fixed days. Each morning the coach picks lift, cardio or rest from the last 7 days and how recovered you are. Lifting days are never back to back.</p>
       <div class="list">
         <div class="row"><div class="l"><b>Lifting sessions</b><div class="small muted">${liftsN} in the last 7 days</div></div>${stepper("lifts", wk.lifts, 2, 5)}</div>
-        <div class="row"><div class="l"><b>Easy cardio sessions</b><div class="small muted">${cardioN} in the last 7 days (Strava, 15+ min, walks excluded)</div></div>${stepper("cardio", wk.cardio, 0, 6)}</div>
+        <div class="row"><div class="l"><b>Easy cardio sessions</b><div class="small muted">${cardioN} in the last 7 days (15+ min, walks excluded)</div></div>${stepper("cardio", wk.cardio, 0, 6)}</div>
         <div class="row"><div class="l"><b>Cardio minutes a week</b><div class="small muted">${cardioMinutes(addDays(t, -6), t)} in the last 7 days${S.settings.hrZ2 ? ` · Zone 2 is ${S.settings.hrZ2.lo}–${S.settings.hrZ2.hi} bpm (${esc(S.settings.hrZ2.source || "")})` : ""}</div></div>${stepper("cardioMin", wk.cardioMin, 30, 300, 10)}</div>
+        <div class="row"><div class="l"><b>Cardio you do</b><div class="suggest" style="margin-top:6px">${Object.entries(CARDIO_TYPES).filter(([k]) => k !== "Walk").map(([k, n]) => `<button class="chipbtn ${cardioTypes().includes(k) ? "primary" : ""}" data-act="cardiotype" data-v="${k}" aria-pressed="${cardioTypes().includes(k)}">${n}</button>`).join("")}</div></div></div>
         <div class="row"><div class="l"><b>Rotation</b><div class="small muted">${rot.map((id, i) => `${i + 1}. ${esc(S.routines[id].name)}`).join(" → ")}. The coach goes in this order, but skips ahead when a routine's muscles are still tired.</div></div></div>
       </div>
       ${sch ? `<details class="fold"><summary>Original template week (reference)</summary><div style="overflow-x:auto;margin-top:8px"><table class="vt"><tbody>${[1, 2, 3, 4, 5, 6, 0].map(d => { const p = sch[d]; return p ? `<tr><td>${DOW[d]}</td><td style="text-align:left;font-family:var(--font-body)">${esc(p.label)}</td><td class="small" style="font-family:var(--font-body);color:var(--muted)">${esc(p.note || "")}</td></tr>` : ""; }).join("")}</tbody></table></div></details>` : ""}

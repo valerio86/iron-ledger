@@ -301,3 +301,5 @@ form.custom input[type=text], form.custom select { width: 100%; border: 1px soli
 .re-nums .stepper .num { min-width: 28px; text-align: center; font-family: var(--font-data); }
 .re-range { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
 .re-range input { width: 56px; height: 38px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); text-align: center; font-family: var(--font-data); font-size: 15px; }
+.sheet .sf { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 16px 14px; border-top: 1px solid var(--line); }
+.sheet .sf .btn { flex: 1; }

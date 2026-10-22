@@ -1315,7 +1315,7 @@ function renderToday() {
   const c = coach(day);
   const rel = day === today ? "Today" : day === addDays(today, -1) ? "Yesterday" : day === addDays(today, 1) ? "Tomorrow" : fmtDay(day, { weekday: "long" });
   const total = (s?.entries || []).reduce((a, e) => a + e.sets.length, 0), done = (s?.entries || []).reduce((a, e) => a + doneSets(e).length, 0);
-  const status = !total ? `<span class="pill neutral">Rest day</span>` : s.finished ? `<span class="pill good">✓ Logged</span>` : `<span class="pill neutral num">${done}/${total} sets</span>`;
+  const status = !total ? (day < today ? `<span class="pill neutral">Rest day</span>` : "") : s.finished ? `<span class="pill good">✓ Logged</span>` : `<span class="pill neutral num">${done}/${total} sets</span>`;
   const p = c.plan, empty = !s?.entries?.length;
   const phase = empty ? "plan" : s.finished ? "done" : "workout";
 
@@ -1365,7 +1365,7 @@ function renderToday() {
   const daynav = `
     <div class="daynav">
       <button class="iconbtn" data-act="prevday" aria-label="Previous day">‹</button>
-      <div class="d"><div class="big">${rel}</div><div class="small muted">${fmtDay(day, { weekday: "short", month: "long", day: "numeric", year: "numeric" })} · ${status}</div></div>
+      <div class="d"><div class="big">${rel}</div><div class="small muted">${fmtDay(day, { weekday: "short", month: "long", day: "numeric", year: "numeric" })}${status ? ` · ${status}` : ""}</div></div>
       ${day !== today ? `<button class="chipbtn primary" data-act="gotoday">Today</button>` : ""}
       <button class="iconbtn" data-act="nextday" aria-label="Next day">›</button>
     </div>`;
@@ -1438,7 +1438,7 @@ function renderToday() {
   return `${daynav}
     <div class="coach summary">
       <div class="label">Workout logged</div>
-      <div class="pt">${done} sets · ${exN} exercise${exN === 1 ? "" : "s"}${mins >= 5 ? ` · ${mins} min` : ""}</div>
+      <div class="pt">${done} set${done === 1 ? "" : "s"} · ${exN} exercise${exN === 1 ? "" : "s"}${mins >= 5 ? ` · ${mins} min` : ""}</div>
       ${bests.length ? `<div class="msgs">${bests.map(msgRow).join("")}</div>` : ""}
       ${fuelLine(day, p)}
       ${ahead.length ? `<div class="ahead"><span class="label">Next up · tentative</span>${ahead.map(aheadRow).join("")}</div>` : ""}
@@ -2024,8 +2024,8 @@ function openRoutineEditor() {
     <div class="sb re">
       ${items || `<p class="small muted" style="margin:0">No exercises yet. Add them in the order you'll do them.</p>`}
       <p class="small muted" style="margin:0">A rep range (say 8 to 12) lets the coach add reps first, then weight once you reach the top of the range. The starting weight comes from your last session.</p>
-      <div class="actions" style="margin-top:0"><button class="btn" data-act="re-add">+ Add exercise</button><button class="btn primary" data-act="re-save">Save routine</button></div>
     </div>
+    <div class="sf"><button class="btn" data-act="re-add">+ Add exercise</button><button class="btn primary" data-act="re-save">Save routine</button></div>
   </div></div>`;
   $("#re-name").oninput = ev => { R.name = ev.target.value; };
 }

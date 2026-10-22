@@ -1,23 +1,38 @@
-# Iron Ledger (standalone)
+# Iron Ledger
 
-The Iron Ledger lifting log, moved out of its claude.ai artifact into a plain web app (PWA) with no build step.
-The artifact (https://claude.ai/artifact/ASSXwnWp4Mdt7TkzSEKYFL) is unchanged and still the personal version.
+A lifting log with a built-in coach. **https://valerio86.github.io/iron-ledger/**
 
-Run locally: `python3 -m http.server 8765` in this folder, then open http://127.0.0.1:8765/.
+Iron Ledger is a lifting log with a coach that plans each day for you: lift, cardio or rest. It tracks weekly sets per muscle, recovery, joint stress and your weight trend, and adjusts routines to the equipment you own. Strava activities and Garmin recovery data feed in, so runs, rides and rows count toward fatigue and the plan reacts to how recovered you are. Works offline, installs to your phone's home screen, and syncs across devices if you sign in.
 
-## Layout
+- **No food logging.** Calorie and protein targets come from your goal and your weigh-in trend, and adjust every couple of weeks.
+- **Equipment-aware.** Tell it what you own; exercises you can't do are swapped, and when you hit the heaviest load you have, progress moves to reps and tempo.
+- **Notes that matter.** Write "left knee creaky" or "slept badly" and the day's suggestions adjust.
+- **Your data stays yours.** Without an account, everything stays on your device. With one, only you can read it. No ads, no analytics. See the [privacy policy](https://valerio86.github.io/iron-ledger/privacy.html).
+
+Not medical advice: stop if something hurts, and check with a doctor if you have an injury or condition.
+
+## Data from other services
+
+**Strava (coming soon).** Iron Ledger reads your activity list (type, date, duration, distance and relative effort) to estimate muscle fatigue and cardio volume. It only reads; it never posts or changes anything on Strava. Activity data stays in your own account and is deleted when you disconnect or delete your account.
+
+**Garmin.** Garmin has no public API for individual apps, so Garmin data comes in through a script you run on your own computer (`connectors/garmin`, written with a connector key from Library → Connections). It is not available to most users.
+
+## Development
+
+No build step. Serve the folder and open it: `python3 -m http.server 8765`, then http://127.0.0.1:8765/.
+
 - `index.html`: shell, manifest and service-worker registration
-- `src/app.js`: the app (catalog, coach, rendering), carried over from the artifact
-- `src/setup.js`: first-run setup, equipment-aware starter routines, manual cardio and weigh-ins (`body/<day>`)
-- `src/sync.js`: optional account + sync (Firebase Auth + Firestore, loaded from gstatic). Config in `src/firebase-config.js`, rules in `firestore.rules`
-- `src/store.js`: on-device store (IndexedDB) with the artifact db's Firestore-like API (`collection().onSnapshot`, `doc().set/delete`), plus `dump`/`restore` for backups
-- `sw.js`: offline cache. Bump `VERSION` whenever a shell file changes
+- `privacy.html`: privacy policy
+- `src/app.js`: catalog, coach and rendering
+- `src/setup.js`: first-run setup, equipment-aware starter routines, manual cardio and weigh-ins (`body/<day>`), script connectors (`connectors/<name>`), account UI
+- `src/store.js`: on-device store (IndexedDB) with a Firestore-like API, per-doc sync bookkeeping, `dump`/`restore` for backups
+- `src/sync.js`: optional account + sync (Firebase Auth + Firestore, loaded from gstatic). Config in `src/firebase-config.js` (public by design), rules in `firestore.rules`
+- `sw.js`: offline cache (network first). Bump `VERSION` when the SHELL list changes
 - `tools/make_icons.py`: rebuilds the PNG icons
 
+**Sync model.** The device is the source of truth. Each change is pushed to `users/{uid}/docs/{path}` as `{p, d (JSON string), at, del, sat}`; other devices pull docs with a newer server timestamp. The newer edit wins per doc. Signing out wipes the device copy.
+
 ## Roadmap
-1. **Done: local-first PWA.** Works offline and installs to the home screen. Backup is a file download, and restore accepts this format or the artifact's old JSON export. Strava/Garmin are shown as "later".
-2. **Done: onboarding + de-personalising.** Six-question first-run setup (units, bodyweight, goal, equipment, lifting days + starter template, cardio). Templates pick exercises by slot from what your gear allows. Manual cardio and weigh-ins replace Strava/Garmin. Cardio wording follows your types. New users get 15.5 kcal/lb maintenance (artifact data keeps 17.5). The first 6 lifting sessions run routines as written (no top-ups or cardio add-ons). Restored artifact data skips setup and keeps its old defaults (row/run, bulk).
-3. **Accounts + sync (built, waiting for config).** Google or email/password sign-in. The device stays the source of truth; each change is pushed to `users/{uid}/docs`, and other devices' changes are pulled by server timestamp. Newer edit wins per doc. Signing out wipes the device copy. Hosted on GitHub Pages: https://valerio86.github.io/iron-ledger/
-4. **Strava.** OAuth via a small token-exchange function (Cloudflare Worker or Firebase Function). The app needs Strava's review before more than one athlete can connect.
-5. **Ship.** Domain, privacy policy, "not medical advice" note, real tests (port the headless harness).
-Later: Capacitor wrapper for Apple Health / Health Connect, which is the legitimate route to Garmin-type data.
+- Strava: OAuth through a small token-exchange worker (the client secret can't live in a public app).
+- Privacy-friendly error reporting, real tests.
+- Later: a native wrapper for Apple Health / Health Connect, the legitimate route to wearable data for everyone.

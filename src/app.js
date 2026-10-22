@@ -1817,7 +1817,8 @@ function renderLibrary() {
       <p class="small muted" style="margin:0">${window.Sync?.state.user ? "Your log is synced to your account. A backup file is still handy as an extra copy." : "Your log is saved on this device only. Download a backup now and then, or sign in above to sync it."}</p>
       <div class="actions" style="margin-top:0"><button class="btn" data-act="export">Download backup</button><button class="btn" data-act="import">Restore from backup…</button></div>
       <input type="file" id="importfile" accept="application/json,.json" hidden>
-    </section>`;
+    </section>
+    <p class="small muted"><a href="privacy.html" style="color:var(--accent)">Privacy</a> · <a href="https://github.com/valerio86/iron-ledger" style="color:var(--accent)">About</a> · Not medical advice.</p>`;
 }
 
 /* ---------- Exercise ↔ muscle map (bipartite) ---------- */

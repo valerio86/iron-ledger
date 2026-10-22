@@ -142,7 +142,7 @@ function renderSetup() {
          <div class="row"><div class="l"><b>Minutes a week</b></div><span class="stepper" style="display:inline-flex;width:auto"><button data-act="ob-cm" data-d="-10" aria-label="Fewer">−</button><span class="num" style="min-width:36px;text-align:center">${d.cardioMin}</span><button data-act="ob-cm" data-d="10" aria-label="More">+</button></span></div>
        </div>`)}
     <div class="actions"><button class="btn primary" data-act="ob-done">Start training</button>${window.Sync?.state.configured ? `<button class="btn ghost" data-act="ac-open">I have an account</button>` : ""}<button class="btn ghost" data-act="import">Restore a backup instead</button></div>
-    <p class="small muted">Everything stays on this device unless you sign in to sync. Not medical advice: stop if something hurts, and check with a doctor if you have an injury or condition.</p>`;
+    <p class="small muted">Everything stays on this device unless you sign in to sync. Not medical advice: stop if something hurts, and check with a doctor if you have an injury or condition. <a href="privacy.html" style="color:var(--accent)">Privacy</a></p>`;
 }
 async function finishSetup() {
   const d = obDraft(), today = dayKey(new Date());
@@ -228,7 +228,7 @@ function openAccount(mode = "in", msg = "") {
         ${mode !== "in" ? `<button type="button" class="linkbtn" data-act="ac-mode" data-v="in">I have an account</button>` : `<button type="button" class="linkbtn" data-act="ac-mode" data-v="up">Create an account</button>`}
         ${mode !== "reset" ? `<button type="button" class="linkbtn" data-act="ac-mode" data-v="reset">Forgot password</button>` : ""}
       </div>
-      <p class="small muted" style="margin:0">Your current log on this device is added to the account.</p>
+      <p class="small muted" style="margin:0">Your current log on this device is added to the account. <a href="privacy.html" style="color:var(--accent)">Privacy</a></p>
     </form></div></div>`;
 }
 document.addEventListener("submit", async ev => {

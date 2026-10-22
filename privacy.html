@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Iron Ledger Privacy</title>
+<meta name="description" content="What Iron Ledger stores, where, and how to delete it.">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;800&family=Public+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="src/styles.css">
+<style>
+body { margin: 0; }
+.doc { max-width: 680px; margin: 0 auto; padding: 24px 16px 64px; }
+.doc h1 { margin-top: 8px; }
+.doc h2 { margin: 28px 0 8px; font-size: 20px; }
+.doc p, .doc li { max-width: 64ch; line-height: 1.55; }
+.doc ul { padding-left: 20px; display: grid; gap: 6px; }
+.doc a { color: var(--accent); }
+.back { display: inline-flex; align-items: center; gap: 8px; text-decoration: none; font-weight: 600; }
+</style>
+</head>
+<body>
+<main class="doc">
+  <a class="back" href="./"><span class="plate" style="width:18px;height:18px;border-radius:50%;background:var(--accent);box-shadow:inset 0 0 0 4px var(--accent),inset 0 0 0 6px var(--surface)"></span>Iron Ledger</a>
+  <h1>Privacy</h1>
+  <p class="muted small">Last updated October 22, 2026</p>
+  <p>Iron Ledger is a lifting log with a coach. This page says what it stores, where, and how to delete it. Short version: your log is yours, there are no ads or analytics, and nothing is sold or shared.</p>
+
+  <h2>Without an account</h2>
+  <p>Everything you enter (workouts, notes, weigh-ins, cardio, settings) is stored in your browser on your device, and nowhere else. Clearing the site's data in your browser deletes it, so download a backup from Library if you want a copy.</p>
+
+  <h2>With an account</h2>
+  <ul>
+    <li><b>Sign-in:</b> handled by Google Firebase Authentication. It stores your email address, and your name if you sign in with Google.</li>
+    <li><b>Your log:</b> copied to Google Cloud Firestore (United States) so it syncs between your devices. Security rules let only your signed-in account read or write it.</li>
+    <li><b>The developer</b> can technically reach the database through Firebase's admin tools, and only looks at an account if you ask for help with a problem.</li>
+  </ul>
+
+  <h2>Connected services</h2>
+  <ul>
+    <li><b>Strava</b> (when available): read-only access to your activity list (type, date, duration, distance and relative effort) to estimate muscle fatigue and cardio volume. Nothing is posted or changed on Strava. The activities are stored in your account and deleted when you disconnect Strava or delete your account.</li>
+    <li><b>Sync scripts</b> (advanced): a connector key lets a script on your own computer, such as a Garmin sync, write to your log. The key works like your sign-in, so keep it private.</li>
+  </ul>
+
+  <h2>What else sees your visit</h2>
+  <p>The app is hosted on GitHub Pages and loads fonts from Google Fonts and the sign-in code from Google. Like any website, those services receive your IP address and browser details when the page loads. Iron Ledger itself has no analytics, tracking or ads.</p>
+
+  <h2>Deleting your data</h2>
+  <ul>
+    <li><b>Delete account</b> (Library → Account) erases your log and connections from the cloud and removes your sign-in.</li>
+    <li><b>Sign out</b> removes the log from that device; it stays in your account.</li>
+  </ul>
+
+  <h2>Health information</h2>
+  <p>Iron Ledger gives general training suggestions, not medical advice. Stop if something hurts, and check with a doctor if you have an injury or condition.</p>
+
+  <h2>Questions</h2>
+  <p>Open an issue at <a href="https://github.com/valerio86/iron-ledger/issues">github.com/valerio86/iron-ledger/issues</a>. If this policy changes, the date above changes with it.</p>
+</main>
+</body>
+</html>

@@ -1,0 +1,13 @@
+// Record of the dashboard setup, for deploying with `npx wrangler deploy` from this folder if ever needed.
+// The client secret is not here: set it with `npx wrangler secret put STRAVA_CLIENT_SECRET`.
+{
+  "name": "iron-ledger-strava",
+  "main": "strava-worker.js",
+  "compatibility_date": "2026-10-22",
+  "vars": {
+    "STRAVA_CLIENT_ID": "289907",
+    "FIREBASE_PROJECT_ID": "iron-ledger-3bb13",
+    "ALLOWED_ORIGINS": "https://valerio86.github.io,http://127.0.0.1:8765"
+  },
+  "kv_namespaces": [{ "binding": "TOKENS", "id": "214d2987de1141d28d9b08cc758af95e" }]
+}

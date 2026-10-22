@@ -303,7 +303,7 @@ document.addEventListener("click", async ev => {
 });
 
 /* ============================== Strava (through worker/strava-worker.js) ============================== */
-const STRAVA_CFG = { clientId: null, worker: null };   // filled in once the worker is deployed
+const STRAVA_CFG = { clientId: "289907", worker: "https://iron-ledger-strava.vpastro86.workers.dev" };   // both public
 const STRAVA_EVERY = 30 * 60e3, STRAVA_DAYS = 60;
 function stravaReady() { return !!(STRAVA_CFG.clientId && STRAVA_CFG.worker); }
 async function stravaCall(path, body) {

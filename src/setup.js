@@ -367,7 +367,7 @@ async function stravaZone2(doc) {
   const todo = (doc.activities || []).filter(a => CARDIO_SPORTS_EXCL.has(a.sport) && "maxhr" in a && a.z2key !== key);
   if (!todo.length) return;
   const could = a => a.maxhr >= z.lo && a.moving >= Z2_BOUT * 60;
-  const ask = todo.filter(could).map(a => a.id).slice(0, 10);
+  const ask = todo.filter(could).sort((a, b) => b.start_local.localeCompare(a.start_local)).map(a => a.id).slice(0, 10);   // newest first: this week matters most
   const { zone2 } = ask.length ? await stravaCall("/strava/zone2", { ids: ask, lo: z.lo, hi: z.hi, bout: Z2_BOUT }) : { zone2: {} };
   const set = new Map([...todo.filter(a => !could(a)).map(a => [a.id, 0]), ...Object.entries(zone2)]);
   if (!set.size) return;

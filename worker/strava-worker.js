@@ -5,6 +5,7 @@
    Google's public keys. Endpoints:
      POST /strava/exchange   {code, scope} → connect: trade the OAuth code for tokens, store them
      GET  /strava/activities ?after=<unix seconds>  → the user's activities (trimmed), refreshing tokens as needed
+     POST /strava/zone2      {ids, lo, hi, bout} → minutes spent between lo and hi bpm in bouts of `bout`+ minutes, per activity
      POST /strava/disconnect → revoke access at Strava and forget the tokens
 
    Settings (Cloudflare dashboard → the worker → Settings → Variables and Secrets / Bindings):
@@ -54,10 +55,27 @@ export default {
           if (!r.ok) return json({ error: "strava_error", status: r.status }, 502);
           const list = await r.json();
           for (const a of list) out.push({ id: String(a.id), name: a.name, sport: a.sport_type || a.type, start_local: a.start_date_local,
-            moving: a.moving_time, elapsed: a.elapsed_time, distance: a.distance, re: a.suffer_score ?? null });
+            moving: a.moving_time, elapsed: a.elapsed_time, distance: a.distance, re: a.suffer_score ?? null,
+            hr: a.has_heartrate ? Math.round(a.average_heartrate) : null, maxhr: a.has_heartrate ? Math.round(a.max_heartrate) : null });
           if (list.length < 100) break;
         }
         return json({ activities: out });
+      }
+      if (url.pathname === "/strava/zone2" && req.method === "POST") {
+        const tok = await freshToken(env, uid);
+        if (!tok) return json({ error: "not_connected" }, 404);
+        const { ids = [], lo, hi, bout = 10 } = await req.json();
+        if (!(lo > 0 && hi > lo)) return json({ error: "bad_zone" }, 400);
+        const zone2 = {};
+        for (const id of ids.slice(0, ZONE2_MAX).filter(id => /^\d+$/.test(id))) {   // a few at a time: each one is a Strava API call
+          const r = await fetch(`https://www.strava.com/api/v3/activities/${id}/streams?keys=time,heartrate&key_by_type=true`, { headers: { Authorization: `Bearer ${tok}` } });
+          if (r.status === 429) break;
+          if (r.status === 404) { zone2[id] = 0; continue; }
+          if (!r.ok) return json({ error: "strava_error", status: r.status }, 502);
+          const st = await r.json();
+          zone2[id] = zoneMinutes(st.time?.data || [], st.heartrate?.data || [], lo, hi, bout);
+        }
+        return json({ zone2 });
       }
       if (url.pathname === "/strava/disconnect" && req.method === "POST") {
         const tok = await freshToken(env, uid).catch(() => null);
@@ -71,6 +89,21 @@ export default {
     }
   },
 };
+
+const ZONE2_MAX = 10;
+// Minutes in [lo, hi] bpm, counting only bouts with at least `bout` minutes in zone. A dip out of zone of up to a minute
+// (a red light, a downhill) doesn't end the bout but isn't counted; gaps between samples are capped at 30 s (paused watch).
+function zoneMinutes(time, hr, lo, hi, bout) {
+  let total = 0, inBout = 0, out = 0;
+  const close = () => { if (inBout >= bout * 60) total += inBout; inBout = 0; };
+  for (let i = 1; i < Math.min(time.length, hr.length); i++) {
+    const dt = Math.min(30, time[i] - time[i - 1]);
+    if (hr[i] >= lo && hr[i] <= hi) { inBout += dt; out = 0; }
+    else if ((out += dt) > 60) close();
+  }
+  close();
+  return Math.round(total / 60);
+}
 
 async function stravaToken(env, params) {
   const r = await fetch("https://www.strava.com/oauth/token", { method: "POST", headers: { "Content-Type": "application/json" },

@@ -271,7 +271,7 @@ function applyConnectors() {
     S.extCardio = sv.activities.map(a => {
       const d = new Date(String(a.start_local).replace(/Z$/, "")), mins = Math.round((a.moving || 0) / 60);   // Strava's "local" time carries a fake Z
       return { id: a.id, name: a.name, sport: a.sport, day: dayKey(d), t: d.getTime() + (a.elapsed || 0) * 1000, mins, km: (a.distance || 0) / 1000,
-        re: a.re ?? Math.round(mins * CARDIO_EFFORT.easy.re), muscles: CARDIO[a.sport] || {} };
+        re: a.re ?? Math.round(mins * CARDIO_EFFORT.easy.re), muscles: CARDIO[a.sport] || {}, z2: a.z2 || 0 };
     });
     S.conn.strava = { st: "ok", at: Date.parse(sv.updated), n: sv.activities.length, msg: `${sv.athlete ? sv.athlete + " · " : ""}updated ${new Date(Date.parse(sv.updated)).toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" })}.` };
   } else {
@@ -341,17 +341,37 @@ async function stravaSync(force = false) {
       await DB.doc("connectors/strava").set({ source: "strava", updated: new Date(0).toISOString(), athlete: r.athlete?.firstname || "", activities: [] });
       force = true; toast("Strava connected");
     }
-    const cur = S.connectors.strava;
-    if (!cur || (!force && Date.now() - Date.parse(cur.updated) < STRAVA_EVERY)) return;
-    const after = Math.floor((Date.now() - STRAVA_DAYS * 864e5) / 1000);
-    const { activities } = await stravaCall(`/strava/activities?after=${after}`);
-    S.stravaErr = null;
-    await DB.doc("connectors/strava").set({ ...cur, updated: new Date().toISOString(), activities });
+    let cur = S.connectors.strava;
+    if (!cur) return;
+    if (force || Date.now() - Date.parse(cur.updated) >= STRAVA_EVERY) {
+      const after = Math.floor((Date.now() - STRAVA_DAYS * 864e5) / 1000);
+      const { activities } = await stravaCall(`/strava/activities?after=${after}`);
+      const old = new Map((cur.activities || []).map(a => [a.id, a]));   // keep Zone 2 minutes already worked out
+      S.stravaErr = null;
+      cur = { ...cur, updated: new Date().toISOString(), activities: activities.map(a => { const o = old.get(a.id); return o?.z2key ? { ...a, z2: o.z2, z2key: o.z2key } : a; }) };
+      await DB.doc("connectors/strava").set(cur);
+    }
+    await stravaZone2(cur);
   } catch (e) {
     if (e.code === "not_connected") { S.stravaErr = "Strava access ended. Connect again."; await DB.doc("connectors/strava").delete(); }
     else S.stravaErr = e.code === "rate_limited" ? "Strava is busy. It will try again later." : `Strava: ${e.message}`;
     applyConnectors(); render();
   }
+}
+// Walks count toward cardio minutes only for their time in Zone 2 (bouts of Z2_BOUT+ minutes), worked out from the heart-rate stream.
+// Walks whose max HR never reached the zone are settled without asking Strava; the rest go 10 per sync.
+const Z2_BOUT = 10;
+async function stravaZone2(doc) {
+  const z = S.settings.hrZ2, key = z ? `${z.lo}-${z.hi}` : null;
+  if (!key) return;
+  const todo = (doc.activities || []).filter(a => CARDIO_SPORTS_EXCL.has(a.sport) && "maxhr" in a && a.z2key !== key);
+  if (!todo.length) return;
+  const could = a => a.maxhr >= z.lo && a.moving >= Z2_BOUT * 60;
+  const ask = todo.filter(could).map(a => a.id).slice(0, 10);
+  const { zone2 } = ask.length ? await stravaCall("/strava/zone2", { ids: ask, lo: z.lo, hi: z.hi, bout: Z2_BOUT }) : { zone2: {} };
+  const set = new Map([...todo.filter(a => !could(a)).map(a => [a.id, 0]), ...Object.entries(zone2)]);
+  if (!set.size) return;
+  await DB.doc("connectors/strava").set({ ...doc, activities: doc.activities.map(a => set.has(a.id) ? { ...a, z2: set.get(a.id), z2key: key } : a) });
 }
 async function stravaDisconnect() {
   try { await stravaCall("/strava/disconnect", {}); } catch {}

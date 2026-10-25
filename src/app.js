@@ -716,9 +716,9 @@ async function loadHealth() {
     render();
   }, { refetchInterval: 60 * 60e3, cache: { staleTime: 10 * 60e3 } });
 }
-const CARDIO_SPORTS_EXCL = new Set(["Walk"]);   // walks are daily life, not training cardio
+const CARDIO_SPORTS_EXCL = new Set(["Walk"]);   // walks are daily life, not training cardio: only their Zone 2 minutes (a.z2) count
 function cardioMinutes(fromDay, toDay) {
-  return S.cardio.filter(a => a.day >= fromDay && a.day <= toDay && !CARDIO_SPORTS_EXCL.has(a.sport)).reduce((n, a) => n + a.mins, 0);
+  return S.cardio.filter(a => a.day >= fromDay && a.day <= toDay).reduce((n, a) => n + (CARDIO_SPORTS_EXCL.has(a.sport) ? a.z2 || 0 : a.mins), 0);
 }
 function healthOn(day) { return S.health[day] || null; }
 function latestWeight(day) {  // most recent weigh-in on or before `day`
@@ -1354,8 +1354,8 @@ function renderToday() {
   if (h?.hrv != null) vit.push(`<span class="pill ${/LOW|UNBALANCED|POOR/i.test(h.hrvStatus || "") ? "warn" : "neutral"}">HRV ${h.hrv} ms</span>`);
   if (h?.bodyBatteryWake != null || h?.bodyBatteryHigh != null) vit.push(`<span class="pill neutral">Body Battery ${h.bodyBatteryWake ?? h.bodyBatteryHigh}</span>`);
   if (lw) vit.push(`<span class="pill neutral">${fmtW(lw.weightLb)}${lw.bodyFatPct ? ` · ${lw.bodyFatPct}% fat` : ""}</span>`);
-  const dayCardio = S.cardio.filter(a => a.day === day && a.re >= CARDIO_MIN_EFFORT);
-  for (const a of dayCardio) vit.push(`<span class="pill neutral">${esc(a.sport)} ${a.mins}′ · effort ${a.re}</span>`);
+  const dayCardio = S.cardio.filter(a => a.day === day && (a.re >= CARDIO_MIN_EFFORT || a.z2));
+  for (const a of dayCardio) vit.push(`<span class="pill neutral">${esc(a.sport)} ${a.mins}′ · effort ${a.re}${a.z2 ? ` · Zone 2 ${a.z2}′` : ""}</span>`);
   const vitHtml = vit.length ? `<div class="suggest">${vit.join("")}</div>` : "";
 
   const KIND = { lift: ["Lift", "good"], cardio: ["Cardio", "neutral"], rest: ["Rest", "warn"], done: ["Done", "good"] };
@@ -1840,6 +1840,8 @@ function renderPlan() {
   const t = dayKey(new Date()), eq = equip();
   let liftsN = 0; for (let i = 0; i <= 6; i++) if (liftedOn(addDays(t, -i))) liftsN++;
   const cardioN = cardioOn(addDays(t, -6), t).length;
+  const z2 = S.settings.hrZ2;
+  const z2Stepper = (k, v) => `<span class="stepper" style="display:inline-flex;width:auto"><button data-act="z2" data-k="${k}" data-d="-1" aria-label="Lower">−</button><span class="num" style="min-width:32px;text-align:center">${v}</span><button data-act="z2" data-k="${k}" data-d="1" aria-label="Higher">+</button></span>`;
   const stepper = (key, v, lo, hi, step = 1) => `<span class="stepper" style="display:inline-flex;width:auto"><button data-act="wk" data-k="${key}" data-d="${-step}" aria-label="Fewer" ${v <= lo ? "disabled" : ""}>−</button><span class="num" style="min-width:24px;text-align:center">${v}</span><button data-act="wk" data-k="${key}" data-d="${step}" aria-label="More" ${v >= hi ? "disabled" : ""}>+</button></span>`;
   if (S.tab === "settings") return `
     <section class="block">
@@ -1891,7 +1893,8 @@ function renderPlan() {
       <div class="list">
         <div class="row"><div class="l"><b>Lifting sessions</b><div class="small muted">${liftsN} in the last 7 days</div></div>${stepper("lifts", wk.lifts, 2, 5)}</div>
         <div class="row"><div class="l"><b>Easy cardio sessions</b><div class="small muted">${cardioN} in the last 7 days (15+ min, walks excluded)</div></div>${stepper("cardio", wk.cardio, 0, 6)}</div>
-        <div class="row"><div class="l"><b>Cardio minutes a week</b><div class="small muted">${cardioMinutes(addDays(t, -6), t)} in the last 7 days${S.settings.hrZ2 ? ` · Zone 2 is ${S.settings.hrZ2.lo}–${S.settings.hrZ2.hi} bpm (${esc(S.settings.hrZ2.source || "")})` : ""}</div></div>${stepper("cardioMin", wk.cardioMin, 30, 300, 10)}</div>
+        <div class="row"><div class="l"><b>Cardio minutes a week</b><div class="small muted">${cardioMinutes(addDays(t, -6), t)} in the last 7 days. Walks add their time in Zone 2 (stretches of ${Z2_BOUT}+ min).</div></div>${stepper("cardioMin", wk.cardioMin, 30, 300, 10)}</div>
+        <div class="row"><div class="l"><b>Zone 2 heart rate</b><div class="small muted">${z2 ? `${z2.lo}–${z2.hi} bpm${z2.source ? ` (${esc(z2.source)})` : ""}` : "Not set, so walks don't count yet. Your Strava heart-rate zones list it as Zone 2."}</div></div>${z2 ? `${z2Stepper("lo", z2.lo)}${z2Stepper("hi", z2.hi)}` : `<button class="btn" data-act="z2set">Set</button>`}</div>
         <div class="row"><div class="l"><b>Cardio you do</b><div class="suggest" style="margin-top:6px">${Object.entries(CARDIO_TYPES).filter(([k]) => k !== "Walk").map(([k, n]) => `<button class="chipbtn ${cardioTypes().includes(k) ? "primary" : ""}" data-act="cardiotype" data-v="${k}" aria-pressed="${cardioTypes().includes(k)}">${n}</button>`).join("")}</div></div></div>
         <div class="row"><div class="l"><b>Rotation</b><div class="small muted">${rot.map((id, i) => `${i + 1}. ${esc(S.routines[id].name)}`).join(" → ")}. The coach goes in this order, but skips ahead when a routine's muscles are still tired.</div></div></div>
       </div>
@@ -2190,6 +2193,13 @@ document.addEventListener("click", async ev => {
       const k = b.dataset.k, cur = { ...WEEK_DEFAULT, ...(S.settings.week || {}) };
       cur[k] = Math.max(0, cur[k] + +b.dataset.d);
       S.settings = { ...S.settings, week: cur }; render(); await saveDoc("settings/main", S.settings); break;
+    }
+    case "z2set": case "z2": {   // walks' Zone 2 minutes are worked out again for the new range on the next Strava sync
+      const z = act === "z2set" ? { lo: 120, hi: 140 } : { ...S.settings.hrZ2 }, k = b.dataset.k;
+      if (k) z[k] = Math.min(200, Math.max(80, z[k] + +b.dataset.d));
+      if (z.hi - z.lo < 5) return;
+      S.settings = { ...S.settings, hrZ2: { lo: z.lo, hi: z.hi, source: "set by you" } }; render(); await saveDoc("settings/main", S.settings);
+      clearTimeout(S.z2Timer); S.z2Timer = setTimeout(() => stravaSync(), 3000); break;
     }
     case "fuelack": case "goal": case "kcal": {
       const N = nutri(), F = fuel(S.day), n = +b.dataset.n || 0;

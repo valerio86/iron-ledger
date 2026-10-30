@@ -82,7 +82,7 @@ const CARDIO = {
 };
 const CARDIO_MIN_EFFORT = 10;   // easy walks don't register
 const PATTERN_NAMES = { push: "Push", pull: "Pull", squat: "Legs: squat", hinge: "Legs: hinge", core: "Core", arms: "Arms" };
-const EFFORT = { easy: { label: "Easy", f: .6, rir: 4 }, solid: { label: "Solid", f: 1, rir: 2 }, hard: { label: "Grinder", f: 1.2, rir: 0 } };
+const EFFORT = { easy: { label: "Easy", f: .6 }, solid: { label: "Solid", f: 1 }, hard: { label: "Grinder", f: 1.2 } };
 
 /* ============================== Equipment ============================== */
 const EQUIP = { barbell: "Barbell", plates: "Loose plates", ezbar: "EZ curl bar", dumbbells: "Dumbbells", kettlebell: "Kettlebell", bench: "Bench", rack: "Rack with safeties",
@@ -771,19 +771,31 @@ function setsPerMuscle(fromDay, toDay) {  // inclusive day range
 }
 function totalSets(fromDay, toDay) { return allDoneSets(x => x.day >= fromDay && x.day <= toDay).reduce((a, x) => a + setWeight(x.e), 0); }
 
-function e1rm(lb, reps, effort) {
-  const r = reps + (EFFORT[effort]?.rir ?? 0);
+function e1rm(lb, reps) {
   if (!lb || !reps) return 0;
-  return r <= 1 ? lb : lb * (1 + r / 30);   // Epley, reps adjusted by reps-in-reserve
+  const r = Math.min(reps, 20);   // past 20 reps a set says little about your max
+  return r <= 1 ? lb : lb * (1 + r / 30);   // Epley, from what you actually lifted: the effort tag doesn't change it
 }
 function entryScore(e, ex) {  // best single-set performance for charts/PRs
   let best = 0;
   for (const s of doneSets(e)) {
-    const v = ex.kind === "weight" ? e1rm(s.w, s.r, e.effort) : s.r;
+    const v = ex.kind === "weight" ? e1rm(s.w, s.r) : s.r;
     if (v > best) best = v;
   }
   return best;
 }
+// The set behind the best estimate (the first time it was reached)
+function bestSet(exId) {
+  let best = null;
+  for (const { day, e } of historyFor(exId)) for (const x of doneSets(e)) {
+    const score = e1rm(x.w, x.r);
+    if (score > (best?.score || 0)) best = { w: x.w, r: x.r, day, score };
+  }
+  return best;
+}
+// Lifts logged per dumbbell with one in each hand: the load is shown per hand, and is double that against bodyweight
+const PER_HAND = new Set(["db_bench", "incline_db", "db_fly", "db_ohp", "db_curl", "hammer", "lateral", "rev_fly", "split_squat", "lunge"]);
+function bodyweightRatio(exId, lb, bw) { return (PER_HAND.has(exId) ? lb * 2 : lb) / bw; }
 function historyFor(exId, beforeDay) {
   const rows = [];
   for (const [day, s] of Object.entries(S.sessions)) {
@@ -1264,7 +1276,7 @@ function coach(day) {
     if (!sc) continue;
     const prev = historyFor(e.ex, day);
     if (prev.length && sc > Math.max(...prev.map(r => r.score)))
-      msgs.push({ lvl: "good", t: `New best on <b>${esc(ex.name)}</b>: ${ex.kind === "weight" ? `est. 1RM ${fmtW(sc)}` : `${sc}${ex.kind === "time" ? "s" : " reps"}`}.` });
+      msgs.push({ lvl: "good", t: `New best on <b>${esc(ex.name)}</b>: ${ex.kind === "weight" ? `est. 1RM ${fmtW(sc)}${PER_HAND.has(ex.id) ? " per hand" : ""}` : `${sc}${ex.kind === "time" ? "s" : " reps"}`}.` });
   }
 
   deferred.forEach(f => f());
@@ -1548,11 +1560,11 @@ function renderProgress() {
   if (!S.progEx || !doneEx[S.progEx]) S.progEx = exIds[0];
   const ex = exById(S.progEx);
   const h = historyFor(S.progEx);
-  const best = Math.max(...h.map(r => r.score));
+  const best = Math.max(...h.map(r => r.score)), bs = ex.kind === "weight" ? bestSet(ex.id) : null;
   const last = h[h.length - 1];
   const fourAgo = h.filter(r => r.day <= addDays(today, -28)).pop();
   const fmtScore = v => ex.kind === "weight" ? toDisp(v) : Math.round(v);
-  const scoreUnit = ex.kind === "weight" ? unit() : ex.kind === "time" ? "s" : "reps";
+  const scoreUnit = ex.kind === "weight" ? unit() + (PER_HAND.has(ex.id) ? " each" : "") : ex.kind === "time" ? "s" : "reps";
   const metricName = ex.kind === "weight" ? "Strength estimate (est. 1-rep max)" : ex.kind === "time" ? "Longest hold" : "Most reps in a set";
 
 
@@ -1587,11 +1599,11 @@ function renderProgress() {
       <h2>Lift progress</h2>
       <select class="sel" id="progex" data-act="progex" aria-label="Exercise">${exIds.map(id => `<option value="${esc(id)}" ${id === S.progEx ? "selected" : ""}>${esc(exById(id).name)} (${doneEx[id]} sets)</option>`).join("")}</select>
       <div class="statrow">
-        <div class="stat"><div class="label">Best</div><div class="v">${fmtScore(best)}<span class="small muted"> ${scoreUnit}</span></div></div>
+        <div class="stat"><div class="label">Best</div><div class="v">${fmtScore(best)}<span class="small muted"> ${scoreUnit}</span></div>${bs ? `<div class="small muted num">from ${toDisp(bs.w)} × ${bs.r}</div>` : ""}</div>
         <div class="stat"><div class="label">Latest</div><div class="v">${fmtScore(last.score)}<span class="small muted"> ${scoreUnit}</span></div></div>
-        <div class="stat"><div class="label">${ex.kind === "weight" && latestWeight(today) ? "× bodyweight" : "vs 4 wk ago"}</div><div class="v">${ex.kind === "weight" && latestWeight(today) ? `${(best / latestWeight(today).weightLb).toFixed(2)}×` : fourAgo ? `${last.score >= fourAgo.score ? "+" : "−"}${Math.abs(Math.round((last.score / fourAgo.score - 1) * 100))}%` : "—"}</div></div>
+        <div class="stat"><div class="label">${ex.kind === "weight" && latestWeight(today) ? `× bodyweight${PER_HAND.has(ex.id) ? " · both hands" : ""}` : "vs 4 wk ago"}</div><div class="v">${ex.kind === "weight" && latestWeight(today) ? `${bodyweightRatio(ex.id, best, latestWeight(today).weightLb).toFixed(2)}×` : fourAgo ? `${last.score >= fourAgo.score ? "+" : "−"}${Math.abs(Math.round((last.score / fourAgo.score - 1) * 100))}%` : "—"}</div></div>
       </div>
-      <div class="label">${metricName}${ex.kind === "weight" ? " · the most you could lift once, worked out from your best set each session" : ""}</div>
+      <div class="label">${metricName}${ex.kind === "weight" ? " · worked out from your best set each session. It's only accurate on sets close to failure, so treat it as a floor: your real max is probably higher" : ""}</div>
       <div class="chart" id="chart1"></div>
       <div class="label">${volName}</div>
       ${volLine}
@@ -1602,6 +1614,7 @@ function renderProgress() {
       <div class="hist">${hist}</div>
     </section>`;
   const load = `
+    ${renderWeekReview(today)}
     ${renderMuscleWeeks(today)}
     ${renderMuscleBars(today)}
     ${renderJointBars(today)}
@@ -1651,6 +1664,48 @@ function renderJointBars(today) {
       <div class="bars">${bars}</div>
     </section>`;
 }
+// The past 7 days against your targets, and the one thing most worth changing next week
+function weekReview(today) {
+  const from = addDays(today, -6), wk = { ...WEEK_DEFAULT, ...(S.settings.week || {}) };
+  const days = Array.from({ length: 7 }, (_, i) => addDays(from, i));
+  const lifts = days.filter(liftedOn).length, mins = cardioMinutes(from, today);
+  const sp = setsPerMuscle(from, today), ms = Object.keys(MUSCLES).filter(m => MUSCLES[m].lo > 0);
+  const below = ms.filter(m => sp[m] < MUSCLES[m].lo).sort((a, b) => (MUSCLES[b].lo - sp[b]) - (MUSCLES[a].lo - sp[a]));
+  const over = Object.keys(MUSCLES).filter(m => sp[m] > MUSCLES[m].hi);
+  const bests = {};
+  for (const d of days) for (const e of S.sessions[d]?.entries || []) {
+    const ex = exById(e.ex), sc = entryScore(e, ex), prev = historyFor(e.ex, d);
+    if (sc && prev.length && sc > Math.max(...prev.map(r => r.score))) bests[e.ex] = sc;
+  }
+  const jr = jointRatios(today), hot = JOINT_ORDER.find(j => jr[j].acute > 0 && jr[j].ratio > 1.5), tr = recoveryTrend(today);
+  const n = m => MUSCLES[m].n.toLowerCase();
+  const focus = tr.hrvDown || tr.rhrUp ? "Recovery is dipping. Trim cardio first and hold your lifting weights."
+    : over.length ? `Ease off ${n(over[0])}: ${Math.round(sp[over[0]])} sets is past its cap of ${MUSCLES[over[0]].hi}.`
+    : hot ? `Go easier on your ${JOINT_NAMES[hot]}: its load is ${jr[hot].ratio.toFixed(1)}× a normal week.`
+    : lifts < wk.lifts ? `Fit in ${wk.lifts - lifts} more lift${wk.lifts - lifts > 1 ? "s" : ""} to reach your ${wk.lifts} a week.`
+    : mins < wk.cardioMin * .8 ? `Add cardio: ${mins} of ${wk.cardioMin} minutes.`
+    : below.length ? `Add sets for ${n(below[0])}: ${Math.round(sp[below[0]])} of ${MUSCLES[below[0]].lo}.`
+    : "Everything is on target. Keep it going.";
+  return { lifts, liftsT: wk.lifts, mins, minsT: wk.cardioMin, inRange: ms.length - below.length - over.filter(m => ms.includes(m)).length, muscles: ms.length, below, over, bests, focus };
+}
+function renderWeekReview(today) {
+  const R = weekReview(today), names = l => l.map(m => MUSCLES[m].n.toLowerCase()).join(", ");
+  const bests = Object.entries(R.bests).map(([id, sc]) => { const ex = exById(id); return `${esc(ex.name)} ${ex.kind === "weight" ? `${fmtW(sc)}${PER_HAND.has(id) ? " each" : ""}` : `${sc}${ex.kind === "time" ? "s" : " reps"}`}`; });
+  return `
+    <section class="block review">
+      <h2>Week in review · last 7 days</h2>
+      <div class="statrow">
+        <div class="stat"><div class="label">Lifts</div><div class="v">${R.lifts}<span class="small muted"> of ${R.liftsT}</span></div></div>
+        <div class="stat"><div class="label">Cardio</div><div class="v">${R.mins}<span class="small muted"> of ${R.minsT} min</span></div></div>
+        <div class="stat"><div class="label">Muscles in range</div><div class="v">${R.inRange}<span class="small muted"> of ${R.muscles}</span></div></div>
+      </div>
+      ${bests.length ? `<div class="small"><b>New bests:</b> ${bests.join(", ")}</div>` : ""}
+      ${R.below.length ? `<div class="small"><b>Below range:</b> ${names(R.below)}</div>` : ""}
+      ${R.over.length ? `<div class="small"><b>Over the cap:</b> ${names(R.over)}</div>` : ""}
+      <div class="small"><b>Next week:</b> ${esc(R.focus)}</div>
+    </section>`;
+}
+function inRange(m, v) { return MUSCLES[m].lo > 0 && v >= MUSCLES[m].lo && v <= MUSCLES[m].hi; }
 function renderMuscleBars(today) {
   const wk = setsPerMuscle(addDays(today, -6), today), cw = cardioLoadPerMuscle(addDays(today, -6), today);
   const prior = setsPerMuscle(addDays(today, -34), addDays(today, -7));
@@ -1661,7 +1716,7 @@ function renderMuscleBars(today) {
   const bars = Object.keys(MUSCLES).filter(m => MUSCLES[m].lo > 0 || wk[m] > 0 || cw[m] >= .05).map(m => {
     const M = MUSCLES[m], v = wk[m], c = cw[m] >= .05 ? cw[m] : 0;
     const tip = `${M.n}: ${fmt(v)} lifting sets${c ? ` + ${c.toFixed(1)} from cardio` : ""} · target ${M.lo}–${M.hi}`;
-    return `<div class="bar"><span>${M.n}</span><div class="track" title="${tip}">
+    return `<div class="bar"><span${inRange(m, v) ? ` class="inrange"` : ""}>${M.n}</span><div class="track" title="${tip}">
       <div class="band" style="left:${M.lo / maxV * 100}%;width:${(M.hi - M.lo) / maxV * 100}%"></div>
       ${v > 0 ? `<div class="fill ${v > M.hi ? "over" : ""}" style="width:${Math.min(100, v / maxV * 100)}%"></div>` : ""}
       ${c ? `<div class="cfill" style="left:${v / maxV * 100}%;width:${Math.min(100 - v / maxV * 100, c / maxV * 100)}%"></div>` : ""}
@@ -1671,7 +1726,7 @@ function renderMuscleBars(today) {
   return `
     <section class="block">
       <h2>Sets per muscle · last 7 days</h2>
-      <p class="small muted" style="margin:0">Green band is the productive weekly range. Secondary muscles count as partial sets; easy sets count half.</p>
+      <p class="small muted" style="margin:0">Green band is the productive weekly range, and a muscle's name turns green once it's in it. Secondary muscles count as partial sets; easy sets count half.</p>
       <div class="legend small"><span><i class="sw lift"></i>Lifting sets</span>${anyCardio ? `<span><i class="sw cardio"></i>Cardio load (fatigue only, not counted toward the target)</span>` : ""}${histOk ? `<span><i class="sw usual"></i>Your usual week</span><span><b class="hot">↑</b> well above usual</span>` : ""}</div>
       <div class="bars">${bars}</div>
     </section>`;
@@ -1685,7 +1740,7 @@ function renderMuscleWeeks(today) {
   const ms = Object.keys(MUSCLES).filter(m => MUSCLES[m].lo > 0 || weeks.some(w => w.sp?.[m] >= .5));
   const head = `<span></span>${weeks.map((w, i) => `<span class="h">${i === N - 1 ? "now" : i % 2 ? "" : fmtDay(w.end, { month: "numeric", day: "numeric" })}</span>`).join("")}`;
   const rows = ms.map(m => { const M = MUSCLES[m];
-    return `<span class="n" title="Target ${M.lo}–${M.hi} sets a week">${M.n}</span>` + weeks.map(w => {
+    return `<span class="n${inRange(m, weeks[N - 1].sp?.[m] ?? 0) ? " inrange" : ""}" title="Target ${M.lo}–${M.hi} sets a week">${M.n}</span>` + weeks.map(w => {
       if (!w.sp) return `<span class="c na"></span>`;
       const v = w.sp[m], cls = v > M.hi ? "hi" : !M.lo ? (v >= .5 ? "opt" : "") : v >= M.lo ? "ok" : "lo";
       return `<span class="c ${cls}" title="${M.n}, week to ${fmtDay(w.end, { month: "short", day: "numeric" })}: ${v.toFixed(1)} sets (target ${M.lo}–${M.hi})">${v >= .5 ? Math.round(v) : "·"}</span>`;

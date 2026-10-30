@@ -28,11 +28,12 @@ No build step. Serve the folder and open it: `python3 -m http.server 8765`, then
 - `src/store.js`: on-device store (IndexedDB) with a Firestore-like API, per-doc sync bookkeeping, `dump`/`restore` for backups
 - `src/sync.js`: optional account + sync (Firebase Auth + Firestore, loaded from gstatic). Config in `src/firebase-config.js` (public by design), rules in `firestore.rules`
 - `sw.js`: offline cache (network first). Bump `VERSION` when the SHELL list changes
+- `tests/`: browser tests for the coach's logic. Run `python3 tools/run_tests.py` (needs Google Chrome)
 - `tools/icon-art.svg` + `tools/make_icons.sh`: the kettlebell icon; the script rebuilds every size (needs Chrome)
 
 **Sync model.** The device is the source of truth. Each change is pushed to `users/{uid}/docs/{path}` as `{p, d (JSON string), at, del, sat}`; other devices pull docs with a newer server timestamp. The newer edit wins per doc. Signing out wipes the device copy.
 
 ## Roadmap
 - Strava review, so more than one athlete can connect (`worker/strava-worker.js` runs on Cloudflare and holds the client secret and tokens).
-- Privacy-friendly error reporting, real tests.
+- Privacy-friendly error reporting.
 - Later: a native wrapper for Apple Health / Health Connect, the legitimate route to wearable data for everyone.

@@ -195,6 +195,7 @@ select.sel { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10p
 .bars { display: grid; gap: 6px; }
 .bar { display: grid; grid-template-columns: 96px 1fr 44px; gap: 8px; align-items: center; font-size: 13px; }
 .bar .track { position: relative; height: 14px; background: var(--sunk); border-radius: 4px; overflow: hidden; }
+.bar .inrange, .mw .n.inrange { color: var(--good); font-weight: 600; }
 .bar .band { position: absolute; top: 0; bottom: 0; background: var(--good-soft); border-inline: 1px dashed var(--good); }
 .bar .fill { position: absolute; left: 0; top: 3px; bottom: 3px; background: var(--accent); border-radius: 0 3px 3px 0; }
 .bar .fill.over { background: var(--bad); }

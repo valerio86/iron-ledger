@@ -1705,7 +1705,8 @@ function renderWeekReview(today) {
       <div class="small"><b>Next week:</b> ${esc(R.focus)}</div>
     </section>`;
 }
-function inRange(m, v) { return MUSCLES[m].lo > 0 && v >= MUSCLES[m].lo && v <= MUSCLES[m].hi; }
+// Muscles with no minimum count once they've had real work (half a set, the point the weekly grid shows a number)
+function inRange(m, v) { return v >= Math.max(MUSCLES[m].lo, .5) && v <= MUSCLES[m].hi; }
 function renderMuscleBars(today) {
   const wk = setsPerMuscle(addDays(today, -6), today), cw = cardioLoadPerMuscle(addDays(today, -6), today);
   const prior = setsPerMuscle(addDays(today, -34), addDays(today, -7));
@@ -1742,7 +1743,7 @@ function renderMuscleWeeks(today) {
   const rows = ms.map(m => { const M = MUSCLES[m];
     return `<span class="n${inRange(m, weeks[N - 1].sp?.[m] ?? 0) ? " inrange" : ""}" title="Target ${M.lo}–${M.hi} sets a week">${M.n}</span>` + weeks.map(w => {
       if (!w.sp) return `<span class="c na"></span>`;
-      const v = w.sp[m], cls = v > M.hi ? "hi" : !M.lo ? (v >= .5 ? "opt" : "") : v >= M.lo ? "ok" : "lo";
+      const v = w.sp[m], cls = v > M.hi ? "hi" : inRange(m, v) ? "ok" : M.lo ? "lo" : "";
       return `<span class="c ${cls}" title="${M.n}, week to ${fmtDay(w.end, { month: "short", day: "numeric" })}: ${v.toFixed(1)} sets (target ${M.lo}–${M.hi})">${v >= .5 ? Math.round(v) : "·"}</span>`;
     }).join(""); }).join("");
   return `

@@ -232,7 +232,6 @@ table.vt th:first-child, table.vt td:first-child { text-align: left; font-family
 .mw .c.ok { background: var(--good-soft); color: var(--good); }
 .mw .c.lo { background: var(--warn-soft); color: var(--warn); }
 .mw .c.hi { background: var(--bad-soft); color: var(--bad); font-weight: 600; }
-.mw .c.opt { color: var(--fg); }
 .mw .c.na { background: transparent; }
 .sw.ok { background: var(--good-soft); box-shadow: inset 0 0 0 1px var(--good); }
 .sw.lo { background: var(--warn-soft); box-shadow: inset 0 0 0 1px var(--warn); }

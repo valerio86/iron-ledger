@@ -54,9 +54,9 @@ function run() {
   });
   test("gear: missing gear blocks the exercise", () => scene({ settings: bigGear }, () => { ok(!canDo("squat")); ok(canDo("db_curl")); }));
 
-  test("in range: inclusive at both ends, never for muscles with no target", () => {
+  test("in range: inclusive at both ends; no minimum means any real work counts", () => {
     const M = MUSCLES.lats; eq(inRange("lats", M.lo - .5), false); eq(inRange("lats", M.lo), true); eq(inRange("lats", M.hi), true); eq(inRange("lats", M.hi + .5), false);
-    const none = Object.keys(MUSCLES).find(m => !MUSCLES[m].lo); eq(inRange(none, 5), false);
+    const none = Object.keys(MUSCLES).find(m => !MUSCLES[m].lo); eq(inRange(none, 0), false); eq(inRange(none, .25), false); eq(inRange(none, 1), true); eq(inRange(none, MUSCLES[none].hi + 1), false);
   });
   test("in range: only the right names turn green on the page", () => scene({ sessions: session(ago(1), entry("bb_row", 50, 8, "solid", 12)) }, () => {
     const box = document.createElement("div"); box.innerHTML = renderMuscleBars(today);

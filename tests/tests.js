@@ -92,6 +92,27 @@ function run() {
     scene({ settings: { unit: "lb", week: { lifts: 0, cardio: 0, cardioMin: 0 } } }, () => ok(weekReview(today).focus.startsWith("Add sets")));
   });
 
+  const weighIns = rows => Object.fromEntries(rows.map(([n, w]) => [ago(n), { weightLb: w }]));
+  const steady = (from, perWk) => Array.from({ length: Math.floor(from / 2) + 1 }, (_, i) => [from - i * 2, 155 + (i * 2) * perWk / 7]);
+  const nutrition = (...daysAgo) => ({ unit: "lb", nutrition: { goal: "bulk", kcal: 3200, changes: daysAgo.map(n => ({ day: ago(n), delta: 200, perWk: .2, kcal: 3200 })) } });
+  test("trend: a calorie change doesn't restart it", () => scene({ health: weighIns(steady(40, .3)), settings: nutrition(9) }, () => near(+fuel(today).tr.perWk.toFixed(2), .3)));
+  test("trend: a few high days after a change barely move it", () => {
+    const rows = [...steady(40, .2).filter(r => r[0] > 4), [3, 158], [2, 158], [1, 158], [0, 158]];
+    scene({ health: weighIns(rows), settings: nutrition(9) }, () => ok(fuel(today).tr.perWk < 1, `read ${fuel(today).tr.perWk}`));
+  });
+  test("trend: too soon after a change, no nudge", () => scene({ health: weighIns(steady(40, -.5)), settings: nutrition(9) }, () => { const F = fuel(today); eq(F.status, "settling"); eq(F.nudge, null); }));
+  test("trend: after 14 days a nudge comes, and stays modest", () => {
+    scene({ health: weighIns(steady(40, -2)), settings: nutrition(14) }, () => { const F = fuel(today); eq(F.status, "low"); eq(F.nudge.delta, 250); });
+    scene({ health: weighIns(steady(40, 2)), settings: nutrition(14) }, () => { const F = fuel(today); eq(F.status, "high"); eq(F.nudge.delta, -250); });
+  });
+  test("trend: on target asks for nothing", () => scene({ health: weighIns(steady(40, .35)), settings: nutrition() }, () => { const F = fuel(today); eq(F.status, "ok"); eq(F.nudge, null); }));
+  test("trend: under 2 weeks of weigh-ins isn't enough", () => scene({ health: weighIns(steady(12, 3)), settings: nutrition() }, () => { const F = fuel(today); eq(F.status, "unknown"); eq(F.nudge, null); }));
+  test("trend: a long gap in weigh-ins is reported", () => {
+    scene({ health: weighIns(steady(40, .3).filter(r => r[0] > 25 || r[0] < 15)), settings: nutrition() }, () => { const g = fuel(today).tr.gap; ok(g && g.days > 7, "gap"); eq(g.from, ago(25)); eq(g.to, ago(15)); });
+    scene({ health: weighIns(steady(40, .3)), settings: nutrition() }, () => eq(fuel(today).tr.gap, null));
+  });
+  test("trend: the card shows the state in words", () => scene({ health: weighIns(steady(40, .3)), settings: nutrition(9) }, () => { const h = renderFuel(today); ok(h.includes("Too soon to judge")); ok(h.includes("last 6 weeks")); }));
+
   test("look-ahead: leaves your data untouched", () => scene({
     sessions: session(ago(2), entry("deadlift", 50, 5)),
     routines: { r: { id: "r", name: "R", items: [{ ex: "deadlift", sets: 3, r: 5, w: 50 }] } } }, () => {

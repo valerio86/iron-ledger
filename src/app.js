@@ -900,6 +900,7 @@ const POST_LIFT = ["a shake made with milk after lifting (~35 g)", "chocolate mi
 function nutri() { const n = S.settings.nutrition || {}; return { goal: GOALS[n.goal] ? n.goal : "bulk", kcal: n.kcal || null, changes: n.changes || [] }; }
 // Signed weekly rate in the display unit, 2 decimals (fmtW rounds to half units, too coarse here)
 function fmtRate(lbWk) { const v = unit() === "kg" ? lbWk / LB_PER_KG : lbWk; return `${v >= 0 ? "+" : "−"}${Math.abs(v).toFixed(2)} ${unit()}/week`; }
+const TREND_DAYS = 42;
 function round50(v) { return Math.round(v / 50) * 50; }
 // Least-squares weight trend over weigh-ins in (from, to]: lb/week, and the fitted weight on `to`
 function weightTrend(from, to) {
@@ -909,25 +910,27 @@ function weightTrend(from, to) {
   const mx = pts.reduce((a, p) => a + p[0], 0) / n, my = pts.reduce((a, p) => a + p[1], 0) / n;
   const sxx = pts.reduce((a, p) => a + (p[0] - mx) ** 2, 0), sxy = pts.reduce((a, p) => a + (p[0] - mx) * (p[1] - my), 0);
   const slope = sxx ? sxy / sxx : 0;
-  return { n, span: pts[n - 1][0] - pts[0][0], perWk: slope * 7, now: my + slope * (daysBetween(from, to) - mx), from };
+  // Longest stretch without a weigh-in, when it's long enough to make the trend less certain
+  let gap = null;
+  for (let i = 1; i < n; i++) if (pts[i][0] - pts[i - 1][0] > Math.max(7, gap?.days || 0)) gap = { days: pts[i][0] - pts[i - 1][0], from: addDays(from, pts[i - 1][0] + 1), to: addDays(from, pts[i][0] - 1) };
+  return { n, span: pts[n - 1][0] - pts[0][0], perWk: slope * 7, now: my + slope * (daysBetween(from, to) - mx), from, gap };
 }
 function fuel(day) {
   const N = nutri(), G = GOALS[N.goal], bw = bwLb(day);
   const kcal = N.kcal || round50(bw * (S.settings.nutrition?.perLb || KCAL_PER_LB) + G.add);
   const prot = Math.round(bw * G.prot / 5) * 5;
   const last = N.changes.filter(c => c.day <= day).pop();
-  // After a change, skip 4 days: water and food in the gut move the scale before muscle or fat does
-  const from = last && addDays(last.day, 4) > addDays(day, -28) ? addDays(last.day, 4) : addDays(day, -28);
-  const tr = weightTrend(from, day);
+  // Six weeks, straight through any calorie change: shorter stretches mostly show water and food in the gut
+  const tr = weightTrend(addDays(day, -TREND_DAYS), day);
   const recent = Object.keys(S.health).filter(k => k > addDays(day, -14) && k <= day && S.health[k].weightLb).length;
   const nextCheck = last ? addDays(last.day, 14) : null, due = !nextCheck || day >= nextCheck;
-  const enough = tr.n >= 6 && tr.span >= 10;
-  const status = !enough ? "unknown" : tr.perWk < G.lo ? "low" : tr.perWk > G.hi + (N.goal === "bulk" ? .25 : 0) ? "high" : "ok";
+  const enough = tr.n >= 6 && tr.span >= 14;
+  const status = !enough ? "unknown" : !due ? "settling" : tr.perWk < G.lo ? "low" : tr.perWk > G.hi + (N.goal === "bulk" ? .25 : 0) ? "high" : "ok";
   let nudge = null;
   if (due && (status === "low" || status === "high")) {
     // 0.1 lb/week ≈ 70 kcal/day in practice (the textbook 50, plus what the body burns off when fed more)
     const raw = ((G.lo + G.hi) / 2 - tr.perWk) * 700;
-    nudge = { delta: Math.sign(raw) * Math.min(400, Math.max(200, round50(Math.abs(raw)))) };
+    nudge = { delta: Math.sign(raw) * Math.min(250, Math.max(100, round50(Math.abs(raw)))) };
   }
   return { N, G, bw, kcal, prot, tr, recent, status, nudge, last, nextCheck };
 }
@@ -1791,16 +1794,16 @@ function renderBody() {
 }
 function renderFuel(today) {
   const F = fuel(today);
-  const st = { ok: ["good", "On track"], low: ["warn", "Below target"], high: ["warn", "Above target"], unknown: ["neutral", "Need more weigh-ins"] }[F.status];
+  const st = { ok: ["good", "On track"], low: ["warn", "Below target"], high: ["warn", "Above target"], unknown: ["neutral", "Need more weigh-ins"], settling: ["neutral", "Too soon to judge"] }[F.status];
   const hist = F.N.changes.slice(-5).reverse().map(c => `<li>${fmtDay(c.day, { month: "short", day: "numeric" })}: ${c.delta > 0 ? "+" : "−"}${Math.abs(c.delta)} kcal → ~${c.kcal.toLocaleString()} (weight was ${fmtRate(c.perWk)})</li>`).join("");
   return `
       <div class="label" style="display:flex;gap:8px;align-items:center">Fuel · ${esc(F.G.n.toLowerCase())} <span class="pill ${st[0]}">${st[1]}</span></div>
       <div class="statrow">
-        <div class="stat"><div class="label">Trend</div><div class="v">${F.tr.perWk != null && F.tr.n >= 3 ? fmtRate(F.tr.perWk).split(" ")[0] : "—"}<span class="small muted"> ${unit()}/wk</span></div><div class="small muted">goal ${F.G.r} lb</div></div>
+        <div class="stat"><div class="label">Trend</div><div class="v">${F.status !== "unknown" ? fmtRate(F.tr.perWk).split(" ")[0] : "—"}<span class="small muted"> ${unit()}/wk</span></div><div class="small muted">goal ${F.G.r} lb</div></div>
         <div class="stat"><div class="label">Daily target</div><div class="v">${F.kcal.toLocaleString()}<span class="small muted"> kcal</span></div></div>
         <div class="stat"><div class="label">Protein</div><div class="v">${F.prot}<span class="small muted"> g</span></div></div>
       </div>
-      <p class="small muted" style="margin:0">No food logging: the trend line through your weigh-ins${F.tr.n >= 2 ? ` (${F.tr.n} since ${fmtDay(addDays(F.tr.from, 1), { month: "short", day: "numeric" })})` : ""} shows whether you're eating enough. The calorie number is a rough guess to anchor on; the changes to it are what matter.${F.nextCheck && F.nextCheck > today ? ` Next check ${fmtDay(F.nextCheck, { weekday: "short", month: "short", day: "numeric" })}.` : ""}</p>
+      <p class="small muted" style="margin:0">No food logging: the trend line through your weigh-ins${F.tr.n >= 2 ? ` (${F.tr.n} in the last ${TREND_DAYS / 7} weeks)` : ""} shows whether you're eating enough.${F.tr.gap ? ` No weigh-ins ${fmtDay(F.tr.gap.from, { month: "short", day: "numeric" })}–${fmtDay(F.tr.gap.to, { month: "short", day: "numeric" })}, so it's less certain.` : ""}${F.status === "settling" ? " Your target changed recently, so the trend needs time to show it." : ""} The calorie number is a rough guess to anchor on; the changes to it are what matter.${F.nextCheck && F.nextCheck > today ? ` Next check ${fmtDay(F.nextCheck, { weekday: "short", month: "short", day: "numeric" })}.` : ""}</p>
       ${hist ? `<ul class="small muted" style="margin:0;padding-left:18px">${hist}</ul>` : ""}`;
 }
 function wireChart() {

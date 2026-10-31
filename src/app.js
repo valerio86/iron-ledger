@@ -1448,14 +1448,14 @@ function renderBodyMap(c, day) {
   </div>`;
 }
 
-// Readiness at a glance: the score as a ring, sleep and HRV beside it, anything else one tap away
-function readinessRing(h, hrvLow, more) {
+// Readiness at a glance: the score as a ring, with the day's other numbers beside it
+function readinessRing(h, hrvLow, lw) {
   const v = Math.max(0, Math.min(100, h.readiness)), lvl = v < 25 ? "bad" : v < 50 ? "warn" : "good", word = v < 25 ? "Poor" : v < 50 ? "Low" : v < 75 ? "OK" : "Good";
-  const row = `<div class="rring">
+  const battery = h.bodyBatteryWake ?? h.bodyBatteryHigh;
+  return `<div class="rring">
     <svg viewBox="0 0 44 44" role="img" aria-label="Readiness ${v} of 100, ${word.toLowerCase()}"><circle class="rt" cx="22" cy="22" r="18" pathLength="100"/><circle class="rv ${lvl}" cx="22" cy="22" r="18" pathLength="100" stroke-dasharray="${v} 100" transform="rotate(-90 22 22)"/><text x="22" y="26.5" text-anchor="middle">${v}</text></svg>
-    <div class="rmarks"><b class="${lvl}">${word}</b>${h.sleepScore != null ? `<span class="${h.sleepScore < 60 ? "warn" : ""}">Sleep <b class="num">${h.sleepScore}</b>${h.sleepHours ? ` · ${h.sleepHours.toFixed(1)}h` : ""}</span>` : ""}${h.hrv != null ? `<span class="${hrvLow ? "warn" : ""}">HRV <b class="num">${h.hrv}</b> ms</span>` : ""}</div>
+    <div class="rmarks"><b class="${lvl}">${word}</b>${h.sleepScore != null ? `<span class="${h.sleepScore < 60 ? "warn" : ""}">Sleep <b class="num">${h.sleepScore}</b>${h.sleepHours ? ` · ${h.sleepHours.toFixed(1)}h` : ""}</span>` : ""}${h.hrv != null ? `<span class="${hrvLow ? "warn" : ""}">HRV <b class="num">${h.hrv}</b> ms</span>` : ""}${battery != null ? `<span>Battery <b class="num">${battery}</b></span>` : ""}${lw ? `<span><b class="num">${fmtW(lw.weightLb)}</b>${lw.bodyFatPct ? ` · ${lw.bodyFatPct}% fat` : ""}</span>` : ""}</div>
   </div>`;
-  return more ? fold("vit-fold", row, `<div style="margin-top:8px">${more}</div>`, "vit") : row;
 }
 
 function renderToday() {
@@ -1483,12 +1483,12 @@ function renderToday() {
   const ring = h?.readiness != null;
   if (!ring && h?.sleepScore != null) vit.push(`<span class="pill ${h.sleepScore < 60 ? "warn" : "neutral"}">Sleep ${h.sleepScore}${h.sleepHours ? ` · ${h.sleepHours.toFixed(1)}h` : ""}</span>`);
   if (!ring && h?.hrv != null) vit.push(`<span class="pill ${hrvLow ? "warn" : "neutral"}">HRV ${h.hrv} ms</span>`);
-  if (h?.bodyBatteryWake != null || h?.bodyBatteryHigh != null) vit.push(`<span class="pill neutral">Body Battery ${h.bodyBatteryWake ?? h.bodyBatteryHigh}</span>`);
-  if (lw) vit.push(`<span class="pill neutral">${fmtW(lw.weightLb)}${lw.bodyFatPct ? ` · ${lw.bodyFatPct}% fat` : ""}</span>`);
+  if (!ring && (h?.bodyBatteryWake != null || h?.bodyBatteryHigh != null)) vit.push(`<span class="pill neutral">Body Battery ${h.bodyBatteryWake ?? h.bodyBatteryHigh}</span>`);
+  if (!ring && lw) vit.push(`<span class="pill neutral">${fmtW(lw.weightLb)}${lw.bodyFatPct ? ` · ${lw.bodyFatPct}% fat` : ""}</span>`);
   const dayCardio = S.cardio.filter(a => a.day === day && a !== p.cardio && (a.re >= CARDIO_MIN_EFFORT || a.z2));   // the plan card already shows the session it's reporting
   for (const a of dayCardio) vit.push(`<span class="pill neutral">${esc(a.sport)} ${a.mins}′ · effort ${a.re}${a.z2 ? ` · Zone 2 ${a.z2}′` : ""}</span>`);
   const vitPills = vit.length ? `<div class="suggest">${vit.join("")}</div>` : "";
-  const vitHtml = ring ? readinessRing(h, hrvLow, vitPills) : vitPills;
+  const vitHtml = ring ? readinessRing(h, hrvLow, lw) + vitPills : vitPills;
 
   const KIND = { lift: ["Lift", "good"], cardio: ["Cardio", "neutral"], rest: ["Rest", "warn"], done: ["Done", "good"] };
   const ahead = day === today ? forecast(day, phase === "done" ? 1 : 4) : [];

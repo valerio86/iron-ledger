@@ -165,9 +165,10 @@ function run() {
   }));
 
   test("readiness: the ring shows with a score, pills without one", () => {
-    const h = readinessRing({ readiness: 86, sleepScore: 78, sleepHours: 9.4, hrv: 47 }, false, "");
+    const h = readinessRing({ readiness: 86, sleepScore: 78, sleepHours: 9.4, hrv: 47, bodyBatteryWake: 97 }, false, { weightLb: 156.5, bodyFatPct: 15.1 });
+    ok(h.includes("Battery"), "battery"); ok(h.includes("15.1% fat"), "weight"); ok(!h.includes("<details"), "nothing folded");
     ok(h.includes('aria-label="Readiness 86 of 100, good"'), "label"); ok(h.includes('stroke-dasharray="86 100"'), "arc"); ok(h.includes("HRV"), "hrv");
-    ok(readinessRing({ readiness: 20 }, false, "").includes(", poor"), "poor");
+    ok(readinessRing({ readiness: 20 }, false, null).includes(", poor"), "poor");
     scene({ health: { [today]: { sleepScore: 70 } } }, () => { const saved = S.day; S.day = today; try { const r = renderToday(); ok(!r.includes("rring"), "no ring"); ok(r.includes("Sleep 70"), "pill"); } finally { S.day = saved; } });
   });
   test("fuel: the cardio extra moves into the fold", () => scene({ cardio: [{ id: "c", name: "Run", sport: "Run", day: today, t: 1, mins: 50, re: 40, muscles: {} }] }, () => {

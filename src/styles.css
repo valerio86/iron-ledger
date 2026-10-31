@@ -362,14 +362,11 @@ form.custom input[type=text], form.custom select { width: 100%; border: 1px soli
 .rring .rv { stroke-linecap: round; }
 .rv.good { stroke: var(--good); } .rv.warn { stroke: var(--warn); } .rv.bad { stroke: var(--bad); }
 .rring text { fill: var(--fg); font-family: var(--font-data); font-size: 13px; font-weight: 600; }
-.rmarks { display: grid; gap: 1px; font-size: 13px; color: var(--muted); }
+.rmarks { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; gap: 2px 14px; font-size: 13px; color: var(--muted); }
+.rmarks > b { flex-basis: 100%; }
 .rmarks > b.good { color: var(--good); } .rmarks > b.warn { color: var(--warn); } .rmarks > b.bad { color: var(--bad); }
 .rmarks span.warn { color: var(--warn); }
 .rmarks span b { color: var(--fg); font-weight: 600; }
-details.fold.vit > summary { display: flex; align-items: center; }
-details.fold.vit > summary::before { content: none; }
-details.fold.vit > summary::after { content: "▸"; margin-left: auto; padding-left: 8px; }
-details.fold.vit[open] > summary::after { content: "▾"; }
 /* Fuel */
 .fuelrow { display: flex; align-items: center; gap: 6px; font-size: 14px; }
 .fuelrow svg { width: 16px; height: 16px; flex: none; fill: none; stroke: var(--warn); stroke-width: 2; stroke-linejoin: round; }

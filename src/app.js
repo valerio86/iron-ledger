@@ -1027,7 +1027,7 @@ function planDay(day) {
     }
   } else if (cardioShort) p = cardioPickSafe();
   else p = { kind: "rest", title: "Rest or light mobility", note: "Lifting and cardio are both on target for the week." };
-  if (todayCardio.length && p.kind === "cardio") p = { kind: "done", title: `Cardio done: ${todayCardio[todayCardio.length - 1].name}`, note: `${todayCardio[todayCardio.length - 1].mins} min.` };
+  if (todayCardio.length && p.kind === "cardio") p = { kind: "done", title: `Cardio done: ${todayCardio[todayCardio.length - 1].name}`, note: `${todayCardio[todayCardio.length - 1].mins} min.`, cardio: todayCardio[todayCardio.length - 1] };
   p.alts = order.filter(r => r !== p.routine);
   p.why = why;
   return p;
@@ -1144,7 +1144,7 @@ function coach(day) {
   const spikes = JOINT_ORDER.filter(j => jr[j].ratio > 1.5 && jr[j].acute > JOINT_FLOOR).sort((a, b) => jr[b].ratio - jr[a].ratio);
   if (spikes.length) {
     const causes = [...new Set(spikes.flatMap(j => jr[j].top))].slice(0, 3);
-    msgs.push({ lvl: jr[spikes[0]].ratio > 2.5 ? "bad" : "warn", t: `<b>Joint load spike</b> this week: ${spikes.slice(0, 3).map(j => `${JOINT_NAMES[j]} <b>${jr[j].ratio.toFixed(1)}×</b>`).join(", ")} ${jr[spikes[0]].basis === "usual" ? "your usual week" : "a normal week of your plan"}${causes.length ? `, mostly from ${causes.map(esc).join(", ")}` : ""}. Joints and tendons adapt more slowly than muscles, so raise their load about 20–30% a week at most.` });
+    msgs.push({ lvl: jr[spikes[0]].ratio > 2.5 ? "bad" : "warn", t: `<b>Joint load spike</b> this week: ${spikes.slice(0, 3).map(j => `${JOINT_NAMES[j]} <b>${jr[j].ratio.toFixed(1)}×</b>`).join(", ")} ${jr[spikes[0]].basis === "usual" ? "your usual week" : "a normal week of your plan"}${causes.length ? `, mostly from ${causes.map(esc).join(", ")}` : ""}.` });
   }
   for (const is of activeIssues(day)) if (is.k.startsWith("joint:") && is.sev >= 3)
     msgs.push({ lvl: "bad", t: `You described your <b>${esc(issueLabel({ ...is, sev: 0 }).toLowerCase())}</b> as more than an ache (sharp, swollen or tweaked). Don't train through that. Rest it, and if it isn't clearly better in a few days, get it checked by a physio or doctor.` });
@@ -1257,7 +1257,7 @@ function coach(day) {
   const chronic = totalSets(addDays(day, -27), day) / 4;
   if (histDays >= 20 && chronic >= 8) {
     const r = acute / chronic;
-    if (r > 1.5) msgs.push({ lvl: "warn", t: `This week's load is <b>${r.toFixed(1)}×</b> your 4-week average. Big jumps like this are where tweaks happen. Ramp up ≤10–20% a week.` });
+    if (r > 1.5) msgs.push({ lvl: "warn", t: `This week's load is <b>${r.toFixed(1)}×</b> your 4-week average. Ramp up ≤10–20% a week.` });
   }
 
   // 7. Rest days
@@ -1343,23 +1343,123 @@ const MSG_RANK = { bad: 0, warn: 1, good: 2, info: 3 };
 const msgRow = m => `<div class="msg ${m.lvl}"><span class="ic">${m.ic || { bad: "!", warn: "!", good: "★", info: "i" }[m.lvl]}</span><div>${m.t}</div></div>`;
 
 // Today changes with the day: a plan before training, the sets while training, a summary once finished
+/* Week strip: three days back, today, three ahead. Filled marks are logged, dashed ones planned. */
+const WEEK_ICON = {
+  lift: `<path d="M3 9v6M6.5 6v12M17.5 6v12M21 9v6M6.5 12h11"/>`,
+  cardio: `<path d="M2 12h5l3-7 4 14 3-7h5"/>`,
+  rest: `<path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/>`,
+};
+function weekDays(day, today) {
+  const from = Math.abs(daysBetween(today, day)) <= 3 ? addDays(today, -3) : addDays(day, -3);
+  return Array.from({ length: 7 }, (_, i) => addDays(from, i));
+}
+// The plan for each day from today on. Later days come from the look-ahead, so a tile and its day view agree.
+function weekPlans(days, today) {
+  const last = days[days.length - 1], plans = {};
+  if (last < today) return plans;
+  if (days.includes(today)) plans[today] = planDay(today);
+  if (last > today) for (const f of forecast(today, Math.min(14, daysBetween(today, last)))) plans[f.day] = f.p;
+  for (const k of days) if (k >= today && !plans[k]) plans[k] = planDay(k);
+  return plans;
+}
+function dayMarks(k, today, plans) {
+  const lifted = liftedOn(k), mins = cardioOn(k, k).reduce((a, x) => a + x.mins, 0), marks = [];
+  const p = k >= today ? plans[k] : null;
+  if (lifted) marks.push({ k: "lift", done: true });
+  else if (p?.kind === "lift") marks.push({ k: "lift" });
+  if (mins) marks.push({ k: "cardio", done: true, mins });
+  else if (p?.kind === "cardio" || (p?.addon && !lifted)) marks.push({ k: "cardio" });
+  return marks.length ? marks : [{ k: "rest", done: k < today }];
+}
+function renderWeekStrip(day, today, days, plans) {
+  const words = m => m.k === "rest" ? (m.done ? "nothing logged" : "rest") : m.k === "lift" ? (m.done ? "lifted" : "lift planned") : m.done ? `cardio, ${m.mins} minutes` : "cardio planned";
+  const tiles = days.map(k => {
+    const marks = dayMarks(k, today, plans);
+    return `<button class="wd ${k === day ? "sel" : ""} ${k === today ? "now" : ""}" data-act="goto" data-day="${k}" aria-pressed="${k === day}" ${k === today ? `aria-current="date"` : ""} aria-label="${fmtDay(k, { weekday: "long", month: "long", day: "numeric" })}: ${marks.map(words).join(", ")}">
+      <span class="wl">${fmtDay(k, { weekday: "narrow" })}</span>
+      <span class="wdi n${marks.length}">${marks.map(m => `<svg class="${m.k} ${m.done ? "done" : "plan"}" viewBox="0 0 24 24" aria-hidden="true">${WEEK_ICON[m.k]}</svg>`).join("")}</span>
+      <span class="wn num">${parseDay(k).getDate()}</span>
+    </button>`;
+  }).join("");
+  return `<div class="week">
+    <button class="wa" data-act="prevday" aria-label="Previous day">‹</button>
+    <div class="wds">${tiles}</div>
+    <button class="wa" data-act="nextday" aria-label="Next day">›</button>
+  </div>`;
+}
+
+/* Body map: muscles coloured by readiness, overloaded joints marked. Coordinates are for the left half; `true` means mirror it. */
+const BM_ARM = "M20 48C22 47 25 46 27 44C28 52 27 62 25 70L19 70C18 62 18 54 20 48Z", BM_FOREARM = "M18.5 72L25 72C25 82 23 92 21 100L16 100C15 90 16 80 18.5 72Z", BM_SIDE = "M28 32C23 34 20 39 20 46C22 46 24 44 25 40C26 36 27 34 28 32Z";
+const BM_FRONT = [
+  ["sideDelt", BM_SIDE, true], ["frontDelt", "M36 31C30 31 26 34 25 40C29 42 33 41 36 38Z", true],
+  ["chest", "M37 33C42 32 47 33 49 35L49 50C44 54 36 52 33 46C33 41 35 37 37 33Z", true],
+  ["biceps", BM_ARM, true], ["forearms", BM_FOREARM, true],
+  ["abs", "M43 54L57 54L56 96Q50 100 44 96Z"], ["obliques", "M41 54L34 50C33 62 33 76 35 90L42 94Z", true],
+  ["quads", "M33 100C31 115 32 135 37 150L44 150C46 135 46 120 44 108L36 98Z", true],
+  ["adductors", "M45 106L49 102L49 128C48 132 47 134 46 134C47 124 47 114 45 106Z", true],
+];
+const BM_BACK = [
+  ["sideDelt", BM_SIDE, true], ["rearDelt", "M35 33C29 32 26 35 25 40C29 43 33 42 37 38Z", true],
+  ["traps", "M44 22L56 22L64 33L56 60L50 66L44 60L36 33Z"], ["upperBack", "M37 40L43 60L34 54C33 49 34 44 37 40Z", true],
+  ["lats", "M33 56L44 63L44 80L37 88C34 78 32 66 33 56Z", true], ["lowerBack", "M45 68L50 72L55 68L56 94L44 94Z"],
+  ["triceps", BM_ARM, true], ["forearms", BM_FOREARM, true],
+  ["glutes", "M35 96L49 96L49 120C43 125 36 122 33 114C33 107 34 101 35 96Z", true],
+  ["hamstrings", "M33 118C37 125 43 127 49 122L47 150L37 150C33 140 32 128 33 118Z", true],
+  ["calves", "M36 156L46 156C47 165 46 176 44 186L38 186C35 176 35 165 36 156Z", true],
+];
+const BM_REST = { front: ["M50 3a9 10 0 1 0 .01 0Z", "M45 21L55 21L55 31L45 31Z", "M18 101a3.5 5 0 1 0 .01 0Z", "M36 158L45 158C45 170 44 184 43 194L38 194C36 184 35 170 36 158Z", "M37 196L44 196L44 202L34 202Z"], back: ["M50 3a9 10 0 1 0 .01 0Z", "M45 21L55 21L55 31L45 31Z", "M18 101a3.5 5 0 1 0 .01 0Z", "M38 188L44 188L44 202L35 202Z"] };
+const BM_JOINT = { shoulder: ["front", 26, 37, true], elbow: ["front", 22, 71, true], wrist: ["front", 18.5, 100, true], hip: ["front", 36, 99, true], knee: ["front", 40, 153, true], ankle: ["front", 40, 195, true], lowerBack: ["back", 50, 88], neck: ["back", 50, 22] };
+const MIRROR = `transform="translate(100,0) scale(-1,1)"`;
+function renderBodyMap(c, day) {
+  const jr = jointRatios(day), wk = setsPerMuscle(addDays(day, -6), day), sel = S.bodySel;
+  const hot = JOINT_ORDER.filter(j => jr[j].ratio > 1.3).sort((a, b) => jr[b].ratio - jr[a].ratio);
+  const jointName = j => JOINT_NAMES[j][0].toUpperCase() + JOINT_NAMES[j].slice(1);
+  const region = ([m, d, mirror]) => {
+    const r = readiness(c.fatNow[m]), attrs = `class="bmr ${r} ${sel === "m:" + m ? "on" : ""}" d="${d}" data-act="bodysel" data-k="m:${m}"${r === "fat" ? ` fill="url(#bm-hatch)"` : ""}`;
+    return `<path ${attrs}><title>${MUSCLES[m].n}: ${READY_LABEL[r].toLowerCase()}</title></path>${mirror ? `<path ${attrs} ${MIRROR}><title>${MUSCLES[m].n}: ${READY_LABEL[r].toLowerCase()}</title></path>` : ""}`;
+  };
+  const marker = (j, x, y) => jr[j].ratio > 1.5
+    ? `<path class="bmj over" d="M${x} ${y - 4.5}l4.5 4.5l-4.5 4.5l-4.5-4.5Z" data-act="bodysel" data-k="j:${j}"/>`
+    : `<circle class="bmj warnj" cx="${x}" cy="${y}" r="3.5" data-act="bodysel" data-k="j:${j}"/>`;
+  const figure = (side, regions) => `
+    ${BM_REST[side].map(d => `<path class="bmn" d="${d}"/><path class="bmn" d="${d}" ${MIRROR}/>`).join("")}
+    ${regions.map(region).join("")}
+    ${hot.filter(j => BM_JOINT[j][0] === side).map(j => { const [, x, y, mirror] = BM_JOINT[j]; return marker(j, x, y) + (mirror ? marker(j, 100 - x, y) : ""); }).join("")}
+    <text x="50" y="214" text-anchor="middle" class="bmt">${side === "front" ? "Front" : "Back"}</text>`;
+  const names = l => Object.keys(MUSCLES).filter(m => readiness(c.fatNow[m]) === l).map(m => MUSCLES[m].n.toLowerCase()).join(", ");
+  const said = [names("fat") && `Fatigued: ${names("fat")}.`, names("rec") && `Recovering: ${names("rec")}.`, hot.length && `Joints above their usual load: ${hot.map(j => `${JOINT_NAMES[j]} ${jr[j].ratio.toFixed(1)} times`).join(", ")}.`].filter(Boolean).join(" ") || "All muscles fresh.";
+  let detail = "Tap a muscle or joint for details.";
+  if (sel?.startsWith("m:") && MUSCLES[sel.slice(2)]) {
+    const m = sel.slice(2), M = MUSCLES[m], v = wk[m];
+    detail = `<b>${M.n}</b>: ${READY_LABEL[readiness(c.fatNow[m])].toLowerCase()}. ${v.toFixed(v % 1 ? 1 : 0)} of ${M.lo ? `${M.lo}–${M.hi}` : `up to ${M.hi}`} sets in the last 7 days.`;
+  } else if (sel?.startsWith("j:") && jr[sel.slice(2)]) {
+    const j = sel.slice(2), r = jr[j];
+    detail = `<b>${jointName(j)}</b>: ${r.ratio.toFixed(1)}× ${r.basis === "usual" ? "your usual week" : "a normal week of your plan"}${r.top.length ? `, mostly from ${r.top.map(esc).join(", ")}` : ""}. Joints and tendons adapt more slowly than muscles, so raise their load about 20–30% a week at most.`;
+  }
+  return `<div class="bm">
+    <svg viewBox="0 0 215 218" role="img" aria-label="Body map. ${esc(said)}">
+      <defs><pattern id="bm-hatch" width="3" height="3" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect class="hb" width="3" height="3"/><rect class="hl" width="1" height="3"/></pattern></defs>
+      <g>${figure("front", BM_FRONT)}</g>
+      <g transform="translate(115,0)">${figure("back", BM_BACK)}</g>
+    </svg>
+    <div class="legend small"><span><i class="bs fresh"></i>Fresh</span><span><i class="bs rec"></i>Recovering</span><span><i class="bs fat"></i>Fatigued</span></div>
+    ${hot.length ? `<div class="suggest">${hot.map(j => `<button class="chipbtn jchip ${jr[j].ratio > 1.5 ? "over" : ""}" data-act="bodysel" data-k="j:${j}" aria-pressed="${sel === "j:" + j}">${jr[j].ratio > 1.5 ? "◆" : "○"} ${jointName(j)} <span class="num">${jr[j].ratio.toFixed(1)}×</span></button>`).join("")}</div>` : ""}
+    <div class="small muted" aria-live="polite">${detail}</div>
+  </div>`;
+}
+
 function renderToday() {
   const day = S.day, today = dayKey(new Date());
   const s = S.sessions[day];
   const c = coach(day);
   const rel = day === today ? "Today" : day === addDays(today, -1) ? "Yesterday" : day === addDays(today, 1) ? "Tomorrow" : fmtDay(day, { weekday: "long" });
   const total = (s?.entries || []).reduce((a, e) => a + e.sets.length, 0), done = (s?.entries || []).reduce((a, e) => a + doneSets(e).length, 0);
-  const cmins = cardioOn(day, day).reduce((a, x) => a + x.mins, 0);
-  const cardioPill = cmins ? `<span class="pill good">✓ Cardio · ${cmins}′</span>` : "";
-  const status = !total ? (cardioPill || (day < today ? `<span class="pill neutral">Rest day</span>` : "")) : (s.finished ? `<span class="pill good">✓ Logged</span>` : `<span class="pill neutral num">${done}/${total} sets</span>`) + (cardioPill ? " " + cardioPill : "");
-  const p = c.plan, empty = !s?.entries?.length;
+  const status = !total ? "" : s.finished ? `<span class="pill good">✓ Logged</span>` : `<span class="pill neutral num">${done}/${total} sets</span>`;
+  const empty = !s?.entries?.length;
+  const weekK = weekDays(day, today), weekP = weekPlans(weekK, today);
+  const p = day > today && empty && weekP[day] ? weekP[day] : c.plan;
   const phase = empty ? "plan" : s.finished ? "done" : "workout";
-
-  const ready = Object.keys(MUSCLES).filter(m => MUSCLES[m].lo > 0 || c.fatNow[m] >= 1.5).map(m => {
-    const r = readiness(c.fatNow[m]);
-    return `<div class="m ${r}" title="${READY_LABEL[r]}"><span>${MUSCLES[m].n}</span><span>${r === "fresh" ? "✓" : r === "rec" ? "~" : "!"}</span></div>`;
-  }).join("");
-  const readyFold = fold("ready-fold", "Muscle readiness right now", `<div class="ready" style="margin-top:8px">${ready}</div>`);
+  const bodyMap = renderBodyMap(c, day);
 
   // Coach messages, most serious first; only the top two stay open
   const sugg = [];
@@ -1374,7 +1474,7 @@ function renderToday() {
   if (h?.hrv != null) vit.push(`<span class="pill ${/LOW|UNBALANCED|POOR/i.test(h.hrvStatus || "") ? "warn" : "neutral"}">HRV ${h.hrv} ms</span>`);
   if (h?.bodyBatteryWake != null || h?.bodyBatteryHigh != null) vit.push(`<span class="pill neutral">Body Battery ${h.bodyBatteryWake ?? h.bodyBatteryHigh}</span>`);
   if (lw) vit.push(`<span class="pill neutral">${fmtW(lw.weightLb)}${lw.bodyFatPct ? ` · ${lw.bodyFatPct}% fat` : ""}</span>`);
-  const dayCardio = S.cardio.filter(a => a.day === day && (a.re >= CARDIO_MIN_EFFORT || a.z2));
+  const dayCardio = S.cardio.filter(a => a.day === day && a !== p.cardio && (a.re >= CARDIO_MIN_EFFORT || a.z2));   // the plan card already shows the session it's reporting
   for (const a of dayCardio) vit.push(`<span class="pill neutral">${esc(a.sport)} ${a.mins}′ · effort ${a.re}${a.z2 ? ` · Zone 2 ${a.z2}′` : ""}</span>`);
   const vitHtml = vit.length ? `<div class="suggest">${vit.join("")}</div>` : "";
 
@@ -1400,11 +1500,10 @@ function renderToday() {
 
   const daynav = `
     <div class="daynav">
-      <button class="iconbtn" data-act="prevday" aria-label="Previous day">‹</button>
       <div class="d"><div class="big">${rel}</div><div class="small muted">${fmtDay(day, { weekday: "short", month: "long", day: "numeric", year: "numeric" })}${status ? ` · ${status}` : ""}</div></div>
       ${day !== today ? `<button class="chipbtn primary" data-act="gotoday">Today</button>` : ""}
-      <button class="iconbtn" data-act="nextday" aria-label="Next day">›</button>
-    </div>`;
+    </div>
+    ${renderWeekStrip(day, today, weekK, weekP)}`;
   const entries = (s?.entries || []).map((e, i) => renderEntry(e, i, day, c.fatPre, actx)).join("");
   const hasRoutines = Object.keys(S.routines).length;
 
@@ -1418,24 +1517,23 @@ function renderToday() {
     const more = `
       ${adapt?.changes.length ? `<div class="adapt"><div class="label">Adjusted for today</div><ul>${adapt.changes.map(c => `<li>${c}</li>`).join("")}</ul></div>` : ""}
       <ul class="why">${p.why.map(w => `<li>${w}</li>`).join("")}</ul>
-      ${other.length ? `<div class="label">Or do this instead</div><div class="suggest">${other.join("")}</div>` : ""}
-      ${ahead.length ? `<div class="ahead"><span class="label">Next days · tentative</span>${ahead.map(aheadRow).join("")}</div>` : ""}`;
+      ${other.length ? `<div class="label">Or do this instead</div><div class="suggest">${other.join("")}</div>` : ""}`;
     const top = msgs.slice(0, 2), rest = msgs.slice(2);
     return `${daynav}${noteHtml}${p.kind === "lift" ? tip("plan") : ""}
     <div class="coach" aria-label="Coach">
       ${vitHtml}
       <div class="today-plan">
-        <div class="label">${day === today ? "Suggested today" : "Suggested for this day"} <span class="pill ${KIND[p.kind][1]}">${KIND[p.kind][0]}</span></div>
-        <div class="pt">${esc(p.title)}</div>
-        ${p.note ? `<div class="small">${esc(p.note)}</div>` : ""}
+        ${p.kind === "done" ? `<div class="label">✓ Done</div>` : `<div class="label">${day === today ? "Suggested today" : "Suggested for this day"} <span class="pill ${KIND[p.kind][1]}">${KIND[p.kind][0]}</span></div>`}
+        <div class="pt">${esc(p.cardio ? p.cardio.name : p.title)}</div>
+        ${p.cardio ? `<div class="small num">${p.cardio.mins}′${p.cardio.re ? ` · effort ${p.cardio.re}` : ""}${p.cardio.z2 ? ` · Zone 2 ${p.cardio.z2}′` : ""}</div>` : p.note ? `<div class="small">${esc(p.note)}</div>` : ""}
         ${p.addon ? `<div class="small"><b>+ Cardio:</b> ${esc(p.addon.text)}</div>` : ""}
         ${main ? `<div class="suggest" style="margin-top:6px">${main}</div>` : ""}
-        ${fold("plan-fold", `Why this${other.length ? ", other options" : ""}${ahead.length ? " and the next few days" : ""}`, `<div class="plan-more">${more}</div>`)}
+        ${fold("plan-fold", `Why this${other.length ? " and other options" : ""}`, `<div class="plan-more">${more}</div>`)}
       </div>
       ${fuelLine(day, p)}
       ${top.length ? `<div class="msgs">${top.map(msgRow).join("")}</div>` : ""}
       ${rest.length ? fold("msgs-fold", `${rest.length} more from the coach`, `<div class="msgs" style="margin-top:8px">${rest.map(msgRow).join("")}</div>`) : ""}
-      ${readyFold}
+      ${bodyMap}
     </div>
     <div class="actions">
       ${p.kind !== "cardio" ? `<button class="btn" data-act="cl-open">+ Cardio</button>` : ""}
@@ -1451,7 +1549,7 @@ function renderToday() {
     <div class="coach mini" aria-label="Coach">
       ${urgent.length ? `<div class="msgs">${urgent.map(msgRow).join("")}</div>` : ""}
       ${fold("coach-fold", `Coach${quiet.length ? ` · ${quiet.length} note${quiet.length > 1 ? "s" : ""}` : ""}${phase === "workout" ? ` · ${esc(p.title)}` : ""}`,
-        `<div style="display:grid;gap:10px;margin-top:8px">${vitHtml}${quiet.length ? `<div class="msgs">${quiet.map(msgRow).join("")}</div>` : ""}${readyFold}</div>`)}
+        `<div style="display:grid;gap:10px;margin-top:8px">${vitHtml}${quiet.length ? `<div class="msgs">${quiet.map(msgRow).join("")}</div>` : ""}${bodyMap}</div>`)}
     </div>`;
   const links = `<div class="linkrow"><button class="linkbtn" data-act="cl-open">+ Cardio</button><button class="linkbtn" data-act="wt-open">Weigh-in</button>${hasRoutines && phase === "workout" ? `<button class="linkbtn" data-act="openroutines">Add a routine</button>` : ""}</div>`;
 
@@ -2197,6 +2295,7 @@ document.addEventListener("click", async ev => {
   if (act === "closehelp") { closeHelp(); return; }
   const E = () => sessionDoc(S.day).entries[i];
   switch (act) {
+    case "bodysel": S.bodySel = S.bodySel === b.dataset.k ? null : b.dataset.k; render(); break;
     case "prevday": S.day = addDays(S.day, -1); render(); break;
     case "nextday": S.day = addDays(S.day, 1); render(); break;
     case "swap": mutate(() => {

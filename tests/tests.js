@@ -133,6 +133,37 @@ function run() {
     finally { [S.progEx, S.progView] = saved; }
   }));
 
+  test("week strip: seven days around today, logged and planned marks", () => scene({
+    sessions: session(ago(1), entry("deadlift", 50, 5)), cardio: [{ id: "c", name: "Run", sport: "Run", day: today, t: 1, mins: 30, re: 40, muscles: {} }],
+    routines: { r: { id: "r", name: "R", items: [{ ex: "deadlift", sets: 3, r: 5, w: 50 }] } } }, () => {
+    const days = weekDays(today, today), plans = weekPlans(days, today);
+    eq(days.length, 7); eq(days[3], today);
+    eq(dayMarks(ago(1), today, plans)[0], { k: "lift", done: true });
+    ok(dayMarks(today, today, plans).some(m => m.k === "cardio" && m.done && m.mins === 30), "today's cardio");
+    ok(dayMarks(addDays(today, 1), today, plans).every(m => !m.done), "future days are only planned");
+    eq(weekDays(ago(20), today)[3], ago(20), "far from today, it centres on the chosen day");
+  }));
+  test("week strip: a future tile and that day's view show the same plan", () => scene({
+    routines: { r: { id: "r", name: "R", items: [{ ex: "deadlift", sets: 3, r: 5, w: 50 }] } } }, () => {
+    const saved = S.day, k = addDays(today, 2); S.day = k;
+    try { const p = weekPlans(weekDays(k, today), today)[k]; ok(renderToday().includes(esc(p.title)), p.title); } finally { S.day = saved; }
+  }));
+  test("body map: every muscle and joint has a place", () => {
+    const drawn = new Set([...BM_FRONT, ...BM_BACK].map(r => r[0]));
+    eq(Object.keys(MUSCLES).filter(m => !drawn.has(m)), []); eq(JOINT_ORDER.filter(j => !BM_JOINT[j]), []);
+  });
+  test("body map: fatigued muscles are hatched and joints flagged, with words for screen readers", () => scene({
+    sessions: Object.assign({}, ...[0, 1, 2].map(i => { const e = entry("lunge", 50, 20, "hard", 10); e.sets.forEach(x => x.t = Date.now() - i * 864e5); return session(ago(i), e); })) }, () => {
+    const html = renderBodyMap(coach(today), today);
+    ok(html.includes("url(#bm-hatch)"), "hatch"); ok(/aria-label="Body map\. Fatigued: /.test(html), "summary"); ok(html.includes("bmj"), "joint marker");
+  }));
+  test("today: a finished run is reported once", () => scene({
+    cardio: [{ id: "c", name: "Lunch Run", sport: "Run", day: today, t: 1, mins: 51, re: 55, muscles: {} }],
+    settings: { unit: "lb", week: { lifts: 0, cardio: 3 } } }, () => {
+    const saved = S.day; S.day = today;
+    try { const h = renderToday(); if (h.includes("Lunch Run")) { eq((h.match(/51′/g) || []).length <= 2, true, "minutes repeated"); ok(!h.includes("Cardio done:"), "old title"); } } finally { S.day = saved; }
+  }));
+
   const failed = results.filter(r => !r.ok);
   document.title = failed.length ? `${failed.length} FAILED` : "all passed";
   document.getElementById("view").innerHTML = `<pre>${esc(results.map(r => `${r.ok ? "ok  " : "FAIL"} ${r.name}${r.msg ? `\n     ${r.msg}` : ""}`).join("\n"))}\n\n${results.length - failed.length} of ${results.length} passed</pre>`;

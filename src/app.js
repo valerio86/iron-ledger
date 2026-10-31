@@ -1448,6 +1448,16 @@ function renderBodyMap(c, day) {
   </div>`;
 }
 
+// Readiness at a glance: the score as a ring, sleep and HRV beside it, anything else one tap away
+function readinessRing(h, hrvLow, more) {
+  const v = Math.max(0, Math.min(100, h.readiness)), lvl = v < 25 ? "bad" : v < 50 ? "warn" : "good", word = v < 25 ? "Poor" : v < 50 ? "Low" : v < 75 ? "OK" : "Good";
+  const row = `<div class="rring">
+    <svg viewBox="0 0 44 44" role="img" aria-label="Readiness ${v} of 100, ${word.toLowerCase()}"><circle class="rt" cx="22" cy="22" r="18" pathLength="100"/><circle class="rv ${lvl}" cx="22" cy="22" r="18" pathLength="100" stroke-dasharray="${v} 100" transform="rotate(-90 22 22)"/><text x="22" y="26.5" text-anchor="middle">${v}</text></svg>
+    <div class="rmarks"><b class="${lvl}">${word}</b>${h.sleepScore != null ? `<span class="${h.sleepScore < 60 ? "warn" : ""}">Sleep <b class="num">${h.sleepScore}</b>${h.sleepHours ? ` · ${h.sleepHours.toFixed(1)}h` : ""}</span>` : ""}${h.hrv != null ? `<span class="${hrvLow ? "warn" : ""}">HRV <b class="num">${h.hrv}</b> ms</span>` : ""}</div>
+  </div>`;
+  return more ? fold("vit-fold", row, `<div style="margin-top:8px">${more}</div>`, "vit") : row;
+}
+
 function renderToday() {
   const day = S.day, today = dayKey(new Date());
   const s = S.sessions[day];
@@ -1468,15 +1478,17 @@ function renderToday() {
   if (sugg.length && c.gaps.length) msgs.push({ lvl: "info", ic: "→", t: `Fresh and short of this week's target: ${c.gaps.map(g => `<b>${MUSCLES[g.m].n.toLowerCase()}</b>`).join(", ")}.<div class="suggest" style="margin-top:6px">${sugg.join("")}</div>` });
 
   const h = healthOn(day), lw = latestWeight(day);
-  const vit = [];
-  if (h?.readiness != null) vit.push(`<span class="pill ${h.readiness < 25 ? "bad" : h.readiness < 50 ? "warn" : "good"}">Readiness ${h.readiness}</span>`);
-  if (h?.sleepScore != null) vit.push(`<span class="pill ${h.sleepScore < 60 ? "warn" : "neutral"}">Sleep ${h.sleepScore}${h.sleepHours ? ` · ${h.sleepHours.toFixed(1)}h` : ""}</span>`);
-  if (h?.hrv != null) vit.push(`<span class="pill ${/LOW|UNBALANCED|POOR/i.test(h.hrvStatus || "") ? "warn" : "neutral"}">HRV ${h.hrv} ms</span>`);
+  const vit = [];   // what isn't in the readiness ring
+  const hrvLow = /LOW|UNBALANCED|POOR/i.test(h?.hrvStatus || "");
+  const ring = h?.readiness != null;
+  if (!ring && h?.sleepScore != null) vit.push(`<span class="pill ${h.sleepScore < 60 ? "warn" : "neutral"}">Sleep ${h.sleepScore}${h.sleepHours ? ` · ${h.sleepHours.toFixed(1)}h` : ""}</span>`);
+  if (!ring && h?.hrv != null) vit.push(`<span class="pill ${hrvLow ? "warn" : "neutral"}">HRV ${h.hrv} ms</span>`);
   if (h?.bodyBatteryWake != null || h?.bodyBatteryHigh != null) vit.push(`<span class="pill neutral">Body Battery ${h.bodyBatteryWake ?? h.bodyBatteryHigh}</span>`);
   if (lw) vit.push(`<span class="pill neutral">${fmtW(lw.weightLb)}${lw.bodyFatPct ? ` · ${lw.bodyFatPct}% fat` : ""}</span>`);
   const dayCardio = S.cardio.filter(a => a.day === day && a !== p.cardio && (a.re >= CARDIO_MIN_EFFORT || a.z2));   // the plan card already shows the session it's reporting
   for (const a of dayCardio) vit.push(`<span class="pill neutral">${esc(a.sport)} ${a.mins}′ · effort ${a.re}${a.z2 ? ` · Zone 2 ${a.z2}′` : ""}</span>`);
-  const vitHtml = vit.length ? `<div class="suggest">${vit.join("")}</div>` : "";
+  const vitPills = vit.length ? `<div class="suggest">${vit.join("")}</div>` : "";
+  const vitHtml = ring ? readinessRing(h, hrvLow, vitPills) : vitPills;
 
   const KIND = { lift: ["Lift", "good"], cardio: ["Cardio", "neutral"], rest: ["Rest", "warn"], done: ["Done", "good"] };
   const ahead = day === today ? forecast(day, phase === "done" ? 1 : 4) : [];
@@ -1594,8 +1606,20 @@ function fuelLine(day, p) {
     : "Eat the same as a training day. Muscle gets built on rest days.";
   const i = daysBetween("2026-01-01", day), a = PROTEIN_IDEAS[(i * 3) % PROTEIN_IDEAS.length], b = PROTEIN_IDEAS[(i * 3 + 5) % PROTEIN_IDEAS.length];
   const idea = lift ? `${POST_LIFT[i % POST_LIFT.length]}, or ${a}` : `${a}, or ${b}`;
-  return `<div class="fuel small"><div><b>Fuel:</b> ~${(F.kcal + extra).toLocaleString()} kcal${extra ? ` (incl. ~${extra} for ${mins}′ cardio)` : ""} · <b>${F.prot} g protein</b></div>
-    ${fold("fuel-fold", "Timing and protein ideas", `<div class="small" style="margin-top:4px">About 30–40 g protein at each of 4 meals. ${tip}</div><div class="small muted"><b>Protein idea:</b> ${idea}.</div>`)}</div>`;
+  return `<div class="fuel small"><div class="fuelrow"><svg viewBox="0 0 24 24" role="img" aria-label="Fuel"><path d="M12 3c1 4 6 6 6 11a6 6 0 0 1-12 0c0-2 1-3.500 2-4.500 0 2 1 3 2 3 1-3-.5-6 2-9.500z"/></svg><span><b class="num">~${(F.kcal + extra).toLocaleString()}</b> kcal · <b class="num">${F.prot} g</b> protein</span></div>
+    ${fold("fuel-fold", "Timing and protein ideas", `<div class="small" style="margin-top:4px">${extra ? `Includes ~${extra} kcal for ${mins}′ cardio. ` : ""}About 30–40 g protein at each of 4 meals. ${tip}</div><div class="small muted"><b>Protein idea:</b> ${idea}.</div>`)}</div>`;
+}
+
+// Column labels are only needed for the first few workouts
+function knowsColumns() { return Object.values(S.sessions).filter(x => x.entries?.some(e => doneSets(e).length)).length >= 3; }
+// A suggested weight is one tap with its reason behind ⓘ. Warnings and instructions stay in words.
+function renderProgHint(prog, hold, e, i, day) {
+  if (hold) return `<div class="hint info">Hold the weight today: ${esc(S.sessions[day].trim)}.</div>`;
+  if (!(prog.bump > 0)) return `<div class="hint ${prog.bump < 0 ? "warn" : "info"}">${prog.text}${prog.bump < 0 ? ` <button class="linkbtn" data-act="bump" data-i="${i}" data-n="${prog.bump}">Apply</button>` : ""}</div>`;
+  const top = Math.max(...prog.last.e.sets.map(s => s.w || 0));
+  if (e.sets.some(s => !s.done && (s.w || 0) >= top + prog.bump)) return "";   // already applied
+  const id = `prog-${e.id || i}`;
+  return `<div class="proghint"><button class="chipbtn upchip" data-act="bump" data-i="${i}" data-n="${prog.bump}" aria-label="Add ${fmtW(prog.bump)} to the remaining sets">↑ ${fmtW(prog.bump)}</button>${fold(id, `<span aria-label="Why this weight">ⓘ</span>`, `<div class="small muted">${prog.text}</div>`, "info")}</div>`;
 }
 
 function renderEntry(e, i, day, fatPre, actx) {
@@ -1633,13 +1657,13 @@ function renderEntry(e, i, day, fatPre, actx) {
     </div>`).join("");
   return `
     <div class="entry ${allDone ? "complete" : ""}">
-      <div class="eh"><div><div class="nm">${esc(ex.name)} ${helpBtn(e.ex, ex.name)}</div><div class="sub">${prim}${e.rHi ? ` · target ${e.rLo}–${e.rHi}${ex.kind === "time" ? "s" : " reps"}` : ""}</div></div>
+      <div class="eh"><div><div class="nm">${esc(ex.name)} ${helpBtn(e.ex, ex.name)}</div><div class="sub">${prim}${e.rHi ? ` · ${e.rLo}–${e.rHi}${ex.kind === "time" ? "s" : " reps"}` : ""}</div></div>
         <button class="x" data-act="rm" data-i="${i}" aria-label="Remove ${esc(ex.name)}">×</button></div>
       ${adv.lvl ? `<div class="hint ${adv.lvl >= 2 ? "bad" : "warn"}"><b>${adv.lvl >= 2 ? "Not the best right now" : "Careful"}:</b> ${esc(adv.reasons.join("; "))}.${adv.alts.length ? `<div class="swaps">Swap for: ${adv.alts.map(a => `<button class="chipbtn" data-act="swap" data-i="${i}" data-id="${esc(a.id)}">${esc(a.name)}</button>`).join("")}</div>` : ""}</div>` : ""}
       ${!prog && ex.kind === "weight" && !e.sets.some(s => s.done || s.w) ? `<div class="hint info">First time: pick a weight you could lift 2–3 more reps than the target with good form. Go lighter if unsure; the coach takes it from there.</div>` : ""}
-      ${lastSets.length && !e.sets.some(s => s.done) ? `<div class="lastline small muted">Last time, ${fmtDay(prog.last.day)}: <span class="num">${lastTxt}</span>${same ? "" : ` <button class="linkbtn" data-act="repeat" data-i="${i}">Same again</button>`}</div>` : ""}
-      ${prog && !e.sets.some(s => s.done) ? `<div class="hint ${prog.bump < 0 ? "warn" : "info"}">${prog.text}${hold ? ` Not today though: ${esc(S.sessions[day].trim)}, so hold the weight.` : ""}${prog.bump && !hold ? ` <button class="linkbtn" data-act="bump" data-i="${i}" data-n="${prog.bump}">Apply</button>` : ""}</div>` : ""}
-      ${allDone ? "" : `<div class="setrow small muted" aria-hidden="true"><span></span><span class="label">${ex.kind === "time" ? "" : ex.kind === "bodyweight" ? "Added load" : "Weight"}</span><span class="label">${ex.kind === "time" ? "Seconds" : "Reps"}</span><span></span></div>`}
+      ${lastSets.length && !same && !e.sets.some(s => s.done) ? `<div class="lastline small muted">Last: <span class="num">${lastTxt}</span> <button class="linkbtn" data-act="repeat" data-i="${i}">Same again</button></div>` : ""}
+      ${prog && !e.sets.some(s => s.done) ? renderProgHint(prog, hold, e, i, day) : ""}
+      ${allDone || knowsColumns() ? "" : `<div class="setrow small muted" aria-hidden="true"><span></span><span class="label">${ex.kind === "time" ? "" : ex.kind === "bodyweight" ? "Added load" : "Weight"}</span><span class="label">${ex.kind === "time" ? "Seconds" : "Reps"}</span><span></span></div>`}
       ${rows}
       <div class="foot">
         ${e.sets.some(s => s.done) || e.effort ? `<div class="effort" role="group" aria-label="How did it feel">
@@ -1671,7 +1695,10 @@ function renderProgress() {
   const fourAgo = h.filter(r => r.day <= addDays(today, -28)).pop();
   const fmtScore = v => ex.kind === "weight" ? toDisp(v) : Math.round(v);
   const scoreUnit = ex.kind === "weight" ? unit() + (PER_HAND.has(ex.id) ? " each" : "") : ex.kind === "time" ? "s" : "reps";
-  const metricName = ex.kind === "weight" ? "Strength estimate (est. 1-rep max)" : ex.kind === "time" ? "Longest hold" : "Most reps in a set";
+  // Change against four weeks ago, or against the first session while there's less history
+  const refR = fourAgo || (h.length > 1 ? h[0] : null), pctCh = refR?.score ? Math.round((last.score / refR.score - 1) * 100) : null;
+  const trend = pctCh == null ? null : { arrow: pctCh > 0 ? "↑" : pctCh < 0 ? "↓" : "→", pct: Math.abs(pctCh), cls: pctCh > 0 ? "up" : pctCh < 0 ? "down" : "", since: fourAgo ? "in 4 wk" : `since ${fmtDay(refR.day)}` };
+  const metricName = ex.kind === "weight" ? "Strength estimate" : ex.kind === "time" ? "Longest hold" : "Most reps in a set";
 
 
   // Weekly totals, last 10 weeks (weeks end today)
@@ -1692,7 +1719,7 @@ function renderProgress() {
   const vpts = Object.keys(volByDay).sort().map(day => ({ day, v: volByDay[day] }));
   const fmtVol = v => Math.round(ex.kind === "weight" && unit() === "kg" ? v / LB_PER_KG : v).toLocaleString();
   const volUnit = ex.kind === "weight" ? unit() : ex.kind === "time" ? "s" : "reps";
-  const volName = ex.kind === "weight" ? "Volume per session · weight × reps, ticked sets" : ex.kind === "time" ? "Total seconds held per session" : "Total reps per session";
+  const volName = ex.kind === "weight" ? "Volume per session" : ex.kind === "time" ? "Total seconds held per session" : "Total reps per session";
   const vl = vpts[vpts.length - 1], vp = vpts[vpts.length - 2];
   const volLine = vl ? `<div class="small muted">Latest <b class="num">${fmtVol(vl.v)}</b> ${volUnit}${vp && vp.v > 0 ? ` · previous ${fmtVol(vp.v)} (${vl.v >= vp.v ? "+" : "−"}${Math.abs(Math.round((vl.v / vp.v - 1) * 100))}%)` : ""} · best ${fmtVol(Math.max(...vpts.map(p => p.v)))}</div>` : "";
   S._vchart = { pts: vpts, fmt: fmtVol, unit: volUnit };
@@ -1704,13 +1731,13 @@ function renderProgress() {
     <section class="block">
       <h2>Lift progress</h2>
       <select class="sel" id="progex" data-act="progex" aria-label="Exercise">${exIds.map(id => `<option value="${esc(id)}" ${id === S.progEx ? "selected" : ""}>${esc(exById(id).name)} (${doneEx[id]} sets)</option>`).join("")}</select>
-      <div class="statrow">
-        <div class="stat"><div class="label">Best</div><div class="v">${fmtScore(best)}<span class="small muted"> ${scoreUnit}</span></div>${bs ? `<div class="small muted num">from ${toDisp(bs.w)} × ${bs.r}</div>` : ""}</div>
-        <div class="stat"><div class="label">Latest</div><div class="v">${fmtScore(last.score)}<span class="small muted"> ${scoreUnit}</span></div></div>
-        <div class="stat"><div class="label">${ex.kind === "weight" && latestWeight(today) ? `× bodyweight${PER_HAND.has(ex.id) ? " · both hands" : ""}` : "vs 4 wk ago"}</div><div class="v">${ex.kind === "weight" && latestWeight(today) ? `${bodyweightRatio(ex.id, best, latestWeight(today).weightLb).toFixed(2)}×` : fourAgo ? `${last.score >= fourAgo.score ? "+" : "−"}${Math.abs(Math.round((last.score / fourAgo.score - 1) * 100))}%` : "—"}</div></div>
+      <div class="hero">
+        <div class="label">${metricName}</div>
+        <div class="herov"><span class="num big">${fmtScore(last.score)}</span><span class="small muted"> ${scoreUnit}</span>${trend ? `<span class="trend ${trend.cls}"><b>${trend.arrow} ${trend.pct}%</b> <span class="small muted">${trend.since}</span></span>` : ""}</div>
       </div>
-      <div class="label">${metricName}${ex.kind === "weight" ? " · worked out from your best set each session. It's only accurate on sets close to failure, so treat it as a floor: your real max is probably higher" : ""}</div>
+      ${ex.kind === "weight" ? fold("est-info", `<span aria-label="About this estimate">ⓘ</span>`, `<div class="small muted">Your estimated 1-rep max, worked out from your best set each session. It's only accurate on sets close to failure, so treat it as a floor: your real max is probably higher.</div>`, "info") : ""}
       <div class="chart" id="chart1"></div>
+      <div class="small muted num herosub">Best ${fmtScore(best)} ${scoreUnit}${bs ? ` · from ${toDisp(bs.w)} × ${bs.r}` : ""}${ex.kind === "weight" && latestWeight(today) ? ` · ${bodyweightRatio(ex.id, best, latestWeight(today).weightLb).toFixed(2)}× bodyweight${PER_HAND.has(ex.id) ? " · both hands" : ""}` : ""}</div>
       <div class="label">${volName}</div>
       ${volLine}
       <div class="chart" id="chart-vol"></div>

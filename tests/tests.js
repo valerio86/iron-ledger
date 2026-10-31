@@ -164,6 +164,35 @@ function run() {
     try { const h = renderToday(); if (h.includes("Lunch Run")) { eq((h.match(/51′/g) || []).length <= 2, true, "minutes repeated"); ok(!h.includes("Cardio done:"), "old title"); } } finally { S.day = saved; }
   }));
 
+  test("readiness: the ring shows with a score, pills without one", () => {
+    const h = readinessRing({ readiness: 86, sleepScore: 78, sleepHours: 9.4, hrv: 47 }, false, "");
+    ok(h.includes('aria-label="Readiness 86 of 100, good"'), "label"); ok(h.includes('stroke-dasharray="86 100"'), "arc"); ok(h.includes("HRV"), "hrv");
+    ok(readinessRing({ readiness: 20 }, false, "").includes(", poor"), "poor");
+    scene({ health: { [today]: { sleepScore: 70 } } }, () => { const saved = S.day; S.day = today; try { const r = renderToday(); ok(!r.includes("rring"), "no ring"); ok(r.includes("Sleep 70"), "pill"); } finally { S.day = saved; } });
+  });
+  test("fuel: the cardio extra moves into the fold", () => scene({ cardio: [{ id: "c", name: "Run", sport: "Run", day: today, t: 1, mins: 50, re: 40, muscles: {} }] }, () => {
+    const h = fuelLine(today, { kind: "done" }); ok(h.includes("Includes ~"), "in fold"); ok(!h.includes("(incl."), "old text");
+  }));
+  test("workout: the last-time line only shows when the steppers differ", () => scene({
+    sessions: { ...session(ago(3), entry("deadlift", 50, 5)), ...session(today, { ex: "deadlift", id: "e", effort: null, sets: [0, 1, 2].map(() => ({ w: 50, r: 5, done: false })) }) } }, () => {
+    const c = adviceCtx(today), e = S.sessions[today].entries[0];
+    ok(!renderEntry(e, 0, today, {}, c).includes("Same again"), "same");
+    e.sets[0].w = 60; ok(renderEntry(e, 0, today, {}, c).includes("Same again"), "different");
+  }));
+  test("workout: a suggested weight is a chip that goes once applied", () => scene({ sessions: session(ago(3), { ...entry("deadlift", 20, 5), effort: "easy" }) }, () => {
+    const prog = progression("deadlift", today), e = { id: "e", sets: [{ w: 20, r: 5 }] };
+    ok(prog.bump > 0, "bump"); ok(renderProgHint(prog, false, e, 0, today).includes("upchip"), "chip");
+    e.sets[0].w = 20 + prog.bump; eq(renderProgHint(prog, false, e, 0, today), "");
+  }));
+  test("workout: column labels go after three workouts", () => {
+    scene({ sessions: { ...session(ago(1), entry("deadlift", 50, 5)), ...session(ago(2), entry("deadlift", 50, 5)) } }, () => ok(!knowsColumns()));
+    scene({ sessions: { ...session(ago(1), entry("deadlift", 50, 5)), ...session(ago(2), entry("deadlift", 50, 5)), ...session(ago(3), entry("deadlift", 50, 5)) } }, () => ok(knowsColumns()));
+  });
+  test("progress: leads with the latest number and its change", () => scene({ sessions: { ...session(ago(35), entry("deadlift", 50, 5)), ...session(ago(1), entry("deadlift", 60, 5)) } }, () => {
+    const saved = [S.progEx, S.progView]; S.progEx = "deadlift"; S.progView = "lifts";
+    try { const h = renderProgress(); ok(h.includes("↑ 20%"), "trend"); ok(h.includes("in 4 wk"), "window"); ok(h.indexOf("hero") < h.indexOf("chart1"), "order"); } finally { [S.progEx, S.progView] = saved; }
+  }));
+
   const failed = results.filter(r => !r.ok);
   document.title = failed.length ? `${failed.length} FAILED` : "all passed";
   document.getElementById("view").innerHTML = `<pre>${esc(results.map(r => `${r.ok ? "ok  " : "FAIL"} ${r.name}${r.msg ? `\n     ${r.msg}` : ""}`).join("\n"))}\n\n${results.length - failed.length} of ${results.length} passed</pre>`;

@@ -773,7 +773,7 @@ function totalSets(fromDay, toDay) { return allDoneSets(x => x.day >= fromDay &&
 
 function e1rm(lb, reps) {
   if (!lb || !reps) return 0;
-  const r = Math.min(reps, 20);   // past 20 reps a set says little about your max
+  const r = Math.min(reps, 12);   // past 12 reps a set tests endurance more than your max
   return r <= 1 ? lb : lb * (1 + r / 30);   // Epley, from what you actually lifted: the effort tag doesn't change it
 }
 function entryScore(e, ex) {  // best single-set performance for charts/PRs
@@ -784,6 +784,7 @@ function entryScore(e, ex) {  // best single-set performance for charts/PRs
   }
   return best;
 }
+function doneSetsOf(rows) { return rows.flatMap(r => doneSets(r.e)); }
 // The set behind the best estimate (the first time it was reached)
 function bestSet(exId) {
   let best = null;
@@ -1267,6 +1268,10 @@ function coach(day) {
     if (h.length < 4 || atCap(ex.id)) continue;   // capped lifts progress by reps; not a stall
     const recent = Math.max(0, ...h.filter(r => r.day > addDays(day, -21)).map(r => r.score));
     const prior = Math.max(0, ...h.filter(r => r.day <= addDays(day, -21)).map(r => r.score));
+    // A heavier weight, or more reps at your heaviest, is progress even when the estimate says otherwise
+    const heaviest = rows => doneSetsOf(rows).reduce((a, s) => (s.w || 0) > a.w || ((s.w || 0) === a.w && s.r > a.r) ? { w: s.w || 0, r: s.r } : a, { w: 0, r: 0 });
+    const hr = heaviest(h.filter(r => r.day > addDays(day, -21))), hp = heaviest(h.filter(r => r.day <= addDays(day, -21)));
+    if (hr.w > hp.w || (hr.w === hp.w && hr.r > hp.r)) continue;
     if (prior && recent && recent <= prior * 1.005) msgs.push({ lvl: "info", t: `<b>${esc(ex.name)}</b> hasn't moved in 3 weeks. Try a lighter week, or change the rep range.` });
   }
 

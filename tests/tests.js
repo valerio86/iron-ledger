@@ -19,7 +19,7 @@ function scene(state, fn) {
 
 function run() {
   test("estimate: Epley from weight and reps", () => { near(e1rm(50, 5), 58.33); near(e1rm(100, 1), 100); eq(e1rm(0, 5), 0); eq(e1rm(50, 0), 0); });
-  test("estimate: reps past 20 add nothing", () => eq(e1rm(50, 40), e1rm(50, 20)));
+  test("estimate: reps past 12 add nothing", () => { eq(e1rm(50, 16), e1rm(50, 12)); ok(e1rm(50, 12) > e1rm(50, 11)); ok(e1rm(60, 8) > e1rm(50, 16)); });
   test("estimate: the effort tag doesn't change it", () => {
     const score = effort => entryScore(entry("deadlift", 50, 5, effort), exById("deadlift"));
     eq(score("easy"), score("hard")); eq(score("solid"), score(undefined));
@@ -36,6 +36,9 @@ function run() {
     () => ok(coach(today).msgs.some(m => m.t.startsWith("New best")))));
   test("best set: the set behind the estimate, first time reached", () => scene({
     sessions: { ...session(ago(9), entry("bb_row", 50, 16, "easy", 1)), ...session(ago(3), entry("bb_row", 60, 8)), ...session(ago(1), entry("bb_row", 50, 16, "solid", 1)) } },
+    () => { const b = bestSet("bb_row"); eq([b.w, b.r, b.day], [60, 8, ago(3)]); }));
+  test("best set: a tie goes to the first time reached", () => scene({
+    sessions: { ...session(ago(9), entry("bb_row", 50, 16, "easy", 1)), ...session(ago(3), entry("bb_row", 50, 13)) } },
     () => { const b = bestSet("bb_row"); eq([b.w, b.r, b.day], [50, 16, ago(9)]); }));
   test("per hand: doubled against bodyweight, barbell lifts aren't", () => {
     eq(bodyweightRatio("db_curl", 20, 160), .25); eq(bodyweightRatio("bb_curl", 40, 160), .25); eq(bodyweightRatio("db_row", 40, 160), .25);
@@ -53,6 +56,11 @@ function run() {
     scene({ sessions, settings: bigGear }, () => { ok(!atCap("deadlift")); const p = progression("deadlift"); ok(!p.capped); ok(p.bump > 0, "should add weight"); });
   });
   test("gear: missing gear blocks the exercise", () => scene({ settings: bigGear }, () => { ok(!canDo("squat")); ok(canDo("db_curl")); }));
+
+  const stalled = sessions => scene({ sessions, settings: bigGear }, () => coach(today).msgs.some(m => m.t.includes("hasn't moved")));
+  test("stall: moving up in weight isn't one, even if the estimate is flat", () => eq(stalled({ ...session(ago(25), entry("bb_row", 50, 16)), ...session(ago(10), entry("bb_row", 50, 13)), ...session(ago(5), entry("bb_row", 50, 13)), ...session(ago(1), entry("bb_row", 60, 8)) }), false));
+  test("stall: more reps at the same weight isn't one", () => eq(stalled({ ...session(ago(25), entry("bb_row", 60, 8)), ...session(ago(22), entry("bb_row", 60, 8)), ...session(ago(5), entry("bb_row", 60, 8)), ...session(ago(1), entry("bb_row", 60, 9)) }), false));
+  test("stall: the same weight and reps for weeks is one", () => eq(stalled({ ...session(ago(25), entry("bb_row", 50, 8)), ...session(ago(22), entry("bb_row", 50, 8)), ...session(ago(5), entry("bb_row", 50, 8)), ...session(ago(1), entry("bb_row", 50, 8)) }), true));
 
   test("in range: inclusive at both ends; no minimum means any real work counts", () => {
     const M = MUSCLES.lats; eq(inRange("lats", M.lo - .5), false); eq(inRange("lats", M.lo), true); eq(inRange("lats", M.hi), true); eq(inRange("lats", M.hi + .5), false);

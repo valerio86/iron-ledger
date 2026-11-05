@@ -77,6 +77,20 @@ Confidence: **strong** = several meta-analyses agree; **moderate** = one good me
   - Licensing: Strength Level's tables are their product. Embedding them in a *public* app needs permission, or a fitted approximation (ratio × bodyweight curves) built from public sources.
   - No rack: squat and bench standards don't apply directly. The app needs the dumbbell and variant standards.
 
+## 7. Age
+
+- **Strength:** relative strength peaks at about 18–35 and is fairly flat across that range (van den Hoek 2024). After 40 it declines, slowly at first and faster after 60. Powerlifting adjusts for this with age coefficients:
+  - **McCulloch, masters:** 1.000 at 40, 1.130 at 50, 1.340 at 60, 1.645 at 70, 2.050 at 80. Two federation tables (APF and Global Powerlifting Alliance) give the same values. The WRPF's 2022 edition revised the early ages slightly (e.g. 1.005 at 41).
+  - **Foster, juniors:** 1.23 at 14, tapering to 1.00 by 23. These values are commonly published, but I couldn't verify them against a primary table. *Moderate.*
+- **Recovery:** older lifters gain at a similar relative rate but recover more slowly. The size of that effect varies a lot between studies. *Weak–moderate.*
+
+**In the app:**
+- **Setting:** optional `settings.birthYear`.
+- **Levels:** standards are divided by the age coefficient outside 23–39.
+- **Fatigue:** decay is 0.5% slower per year past 40, capped at 25%.
+- **Deloads:** due after 4 hard weeks instead of 5 from age 50.
+- The recovery numbers are a cautious guess, not a measured value.
+
 ## Sources
 
 - Bell L. et al. (2023). Integrating deloading into strength and physique sports training programmes: an international Delphi consensus approach. *Sports Medicine – Open* 9:87. PMC10511399.
@@ -90,3 +104,4 @@ Confidence: **strong** = several meta-analyses agree; **moderate** = one good me
 - ExRx, Strength standards (Kilgore): exrx.net/Questions/StrengthTests.
 - Barbell Medicine, "Progressive Loading Part 3: The Death of the Novice-Intermediate-Advanced Framework".
 - Rippetoe M., Kilgore L. *Practical Programming for Strength Training*.
+- McCulloch masters age coefficients: APF Best Lifter formula page (worldpowerliftingcongress.com) and Global Powerlifting Alliance master age formula.

@@ -259,6 +259,20 @@ function run() {
     ok(!by.calves.covered && !by.calves.best, "no calf standard");
     const h = renderLevels(today); ok(h.includes("By muscle") && h.includes("No standards for") && h.includes("lvrow lag"), "card");
   }));
+  test("age: no change 23–39; masters and juniors get lower standards", () => {
+    eq(ageCoef(null), 1); eq(ageCoef(30), 1); eq(ageCoef(39), 1); eq(ageCoef(40), 1); eq(ageCoef(50), 1.13); eq(ageCoef(60), 1.34); eq(ageCoef(95), 2.549); eq(ageCoef(16), 1.13); eq(ageCoef(10), 1.23);
+    const y = new Date().getFullYear(), sessions = session(ago(3), entry("db_bench", 40, 10)), base = { health: bwAt(155) };
+    const at = by => scene({ sessions, ...base, settings: { unit: "lb", stdSex: "m", ...(by ? { birthYear: by } : {}) } }, () => liftLevel("db_bench", today).score);
+    eq(at(y - 30), at(null), "30 unchanged"); ok(at(y - 60) > at(y - 30) + .3, "60 scores higher");
+  });
+  test("age: recovery slows past 40, and deloads come a week sooner from 50", () => {
+    const y = new Date().getFullYear();
+    scene({ settings: { unit: "lb", birthYear: y - 30 } }, () => eq(recoveryScale(), 1));
+    scene({ settings: { unit: "lb", birthYear: y - 60 } }, () => near(recoveryScale(), 1.1));
+    const four = { ...bigGear, deloads: [{ start: ago(34), end: ago(28) }] };   // exactly 4 full weeks since the last deload
+    scene({ sessions: steadyWeeks(4), settings: { ...four, birthYear: y - 30 } }, () => { eq(hardWeeks(today), 4); eq(deloadDue(today), null); });
+    scene({ sessions: steadyWeeks(4), settings: { ...four, birthYear: y - 55 } }, () => ok(deloadDue(today), "due at 4 weeks"));
+  });
   test("sources: every source opens with links", () => { for (const k of Object.keys(SOURCES)) { openSource(k); ok($("#help .srcs a"), k); } closeHelp(); });
 
   // Balanced sessions

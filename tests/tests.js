@@ -220,6 +220,41 @@ function run() {
     const m = coach(today).msgs; ok(m.some(x => x.t.includes("Deload week</b>, day 2 of 7")), "banner"); ok(!m.some(x => /push for a PR|Light this week/.test(x.t)), "nudges");
   }));
 
+  // Strength levels
+  const bwAt = (lb, n = 1) => ({ [ago(n)]: { weightLb: lb } });
+  test("levels: score is 1 at beginner, 5 at elite, straight-line between", () => {
+    const th = [10, 20, 30, 40, 50];
+    eq(levelScore(5, th), .5); eq(levelScore(10, th), 1); eq(levelScore(25, th), 2.5); eq(levelScore(60, th), 5);
+    eq(levelName(.5), "Below beginner"); eq(levelName(2.5), "Novice"); eq(levelName(5), "Elite");
+  });
+  test("levels: thresholds scale with bodyweight^2/3; variants are a share of the anchor", () => {
+    const at165 = stdThresholds("bench", 165, "m").th; near(at165[2], 165);
+    const at200 = stdThresholds("bench", 200, "m").th; ok(at200[2] > 165 && at200[2] / 200 < 1, "heavier: more load, less per pound");
+    near(stdThresholds("db_bench", 165, "m").th[2], 165 * .42);
+    ok(stdThresholds("bench", 135, "f").th[2] < stdThresholds("bench", 135, "m").th[2]);
+    eq(stdThresholds("crunch", 160, "m"), null);
+  });
+  test("levels: off until standards are chosen, then from the best recent set", () => {
+    const sessions = session(ago(3), entry("db_bench", 40, 10));
+    scene({ sessions, health: bwAt(155) }, () => eq(liftLevel("db_bench", today), null));
+    scene({ sessions, health: bwAt(155), settings: { unit: "lb", stdSex: "m" } }, () => { const l = liftLevel("db_bench", today); eq(l.level, "Novice"); ok(l.next > l.v, "next step is above"); });
+    scene({ sessions: session(ago(70), entry("db_bench", 40, 10)), health: bwAt(155), settings: { unit: "lb", stdSex: "m" } }, () => eq(liftLevel("db_bench", today), null, "older than 8 weeks"));
+  });
+  test("levels: added weight on a pull-up counts as extra reps", () => scene({
+    sessions: session(ago(2), entry("pullup", 20, 5)), health: bwAt(160), settings: { unit: "lb", stdSex: "m" } }, () => {
+    const l = liftLevel("pullup", today); ok(l.v > 5 && l.v < 12, `got ${l.v}`); eq(l.kind, "reps");
+  }));
+  const lagScene = { sessions: { ...session(ago(9), entry("db_bench", 60, 8), entry("db_row", 90, 8), entry("db_curl", 35, 8)), ...session(ago(4), entry("goblet", 25, 8)) },
+    health: bwAt(155, 9), settings: { ...bigGear, unit: "lb", stdSex: "m", equip: { have: ["dumbbells"], max: { dumbbells: 138 } } } };
+  test("levels: a movement a full level behind is flagged, and goes first at Start", () => scene(lagScene, () => {
+    const { groups } = strengthLevels(today);
+    eq(groups.filter(g => g.lag).map(g => g.k), ["squat"]);
+    S.routines = { r: { id: "r", name: "R", items: [{ ex: "db_bench", sets: 3, r: 8, w: 0 }, { ex: "goblet", sets: 3, r: 8, w: 0 }] } };
+    const a = adaptRoutine(S.routines.r, today); eq(a.items[0].ex, "goblet"); ok(a.changes.some(c => c.includes("first")));
+    ok(renderLevels(today).includes("lvrow lag"), "card marks it");
+  }));
+  test("sources: every source opens with links", () => { for (const k of Object.keys(SOURCES)) { openSource(k); ok($("#help .srcs a"), k); } closeHelp(); });
+
   const failed = results.filter(r => !r.ok);
   document.title = failed.length ? `${failed.length} FAILED` : "all passed";
   document.getElementById("view").innerHTML = `<pre>${esc(results.map(r => `${r.ok ? "ok  " : "FAIL"} ${r.name}${r.msg ? `\n     ${r.msg}` : ""}`).join("\n"))}\n\n${results.length - failed.length} of ${results.length} passed</pre>`;

@@ -998,6 +998,7 @@ function cardioOn(fromDay, toDay) { return S.cardio.filter(a => a.day >= fromDay
 function routineOf(day) {
   const s = S.sessions[day]; if (!s) return null;
   if (s.routine && S.routines[s.routine]) return S.routines[s.routine];
+  if (s.routine === "auto") return AUTO;
   const exs = new Set((s.entries || []).filter(e => doneSets(e).length).map(e => e.ex));
   let best = null, bestN = 0;
   for (const r of Object.values(S.routines)) { const n = r.items.filter(it => exs.has(it.ex)).length; if (n > bestN && n >= Math.ceil(r.items.length / 2)) { best = r; bestN = n; } }
@@ -1134,14 +1135,16 @@ function planDay(day) {
   else if (lastLift === yest) {
     p = cardioShort ? cardioPickSafe() : { kind: "rest", title: "Rest or light mobility", note: "Cardio is already on target this week." };
     why.push("you lifted yesterday, and lifting days shouldn't be back to back");
-  } else if (liftDays.length < wk.lifts && order.length) {
+  } else if (liftDays.length < wk.lifts && (order.length || autoMode())) {
     const ok = r => !blockedIn(r).length;
-    const mostlyBlocked = order.every(r => blockedIn(r).length * 2 >= r.items.length);
+    const built = autoMode() ? buildSession(day) : null;
+    const mostlyBlocked = built ? built.items.length < 2 : order.every(r => blockedIn(r).length * 2 >= r.items.length);
     if (mostlyBlocked) {
       p = cardioShort ? cardioPickSafe() : { kind: "rest", title: "Rest or light mobility", note: "" };
       why.push(`every routine leans on what you noted (${jointIssues.map(i => JOINT_NAMES[i.k.slice(6)]).join(", ")}), so lifting can wait a day`);
     } else {
-      const pick = order.find(r => ok(r) && !tiredIn(r).length) || order.find(ok) || order.find(r => !tiredIn(r).length) || order[0];
+      const pick = built || order.find(r => ok(r) && !tiredIn(r).length) || order.find(ok) || order.find(r => !tiredIn(r).length) || order[0];
+      if (built) why.push(...built.why);
       p = { kind: "lift", routine: pick, title: pick.name, deload: dl, note: dl ? "Deload week: half the sets at about 90% of your weight. Stop every set with 3–4 reps left."
         : low ? "Readiness is low: Start drops a set from each exercise and holds your weights. Skip grinders."
         : tiredNote ? "You noted feeling tired: Start drops a set from each exercise. Keep it moderate, no grinders."
@@ -1153,11 +1156,12 @@ function planDay(day) {
         const m = Math.min(25, Math.max(15, Math.round((minsT - minsDone) / 3 / 5) * 5));
         p.addon = { mins: m, text: `${m} min easy ${lowImpactWords()} after lifting${z2Text()}. You're at ${minsDone} of ${minsT} cardio minutes this week.` };
       }
-      if (pick !== order[0]) {
+      if (built) {}
+      else if (pick !== order[0]) {
         const r0 = order[0], b0 = blockedIn(r0), t0 = tiredIn(r0);
         why.push(`${esc(r0.name)} is next in rotation, but ${b0.length ? `${b0.map(esc).join(", ")} ${b0.length > 1 ? "aren't" : "isn't"} a good idea with your ${jointIssues.map(i => JOINT_NAMES[i.k.slice(6)]).join("/")}` : `${t0.map(m => MUSCLES[m].n.toLowerCase()).join(", ")} still need recovery`}`);
       } else if (tiredIn(pick).length) why.push(`every routine hits something still tired (${tiredIn(pick).map(m => MUSCLES[m].n.toLowerCase()).join(", ")}). Go lighter there`);
-      const bp = blockedIn(pick);
+      const bp = built ? [] : blockedIn(pick);
       if (bp.length) why.push(`swap ${bp.map(esc).join(", ")}: each one's card suggests an alternative`);
     }
   } else if (cardioShort) p = cardioPickSafe();
@@ -1207,7 +1211,7 @@ function adaptRoutine(r, day) {
   }
   // 3. Top up to two fresh muscles your routines under-cover across a week, minus extra work already done this week
   //    (structural gaps, so a lower day doesn't fill in for the upper day that's coming anyway). Not on a lighter day.
-  if (!trimReason(day) && !isNewcomer(day)) {
+  if (!r.auto && !trimReason(day) && !isNewcomer(day)) {
     const base = r.items.reduce((a, it) => a + it.sets, 0);
     let total = items.reduce((a, x) => a + x.sets, 0), added = 0;
     const used = {}; for (const x of allDoneSets()) used[x.ex.id] = (used[x.ex.id] || 0) + 1;
@@ -1242,6 +1246,77 @@ function routineCoverage(day) {
     for (const [m, w] of Object.entries(exById(ex).muscles)) if (cov[m] != null) cov[m] += w * it.sets;
   }
   return { cov, exs };
+}
+
+/* Balanced session (settings.week.mode = "auto"): built each day instead of taken from a routine.
+   Full body, three main slots (lower, push, pull), each alternating between its two movements so each is
+   trained about 1.5× a week on 3 lift days (frequency helps strength: docs/training-research.md §3). Then up to
+   2 accessories for the muscles furthest below their weekly range. Exercises: what your gear and joints allow,
+   preferring the ones you've done most (so progression has a history to work from). */
+const SLOT_SUBS = {
+  squat:  ["Squat", ["squat", "front_squat", "goblet", "split_squat", "lunge"], "squat"],
+  hinge:  ["Hinge", ["deadlift", "rdl", "hip_thrust", "sl_rdl", "glute_bridge", "kb_swing"], "hinge"],
+  hpress: ["Press", ["bench", "db_bench", "floor_press", "incline_db", "dip", "pushup"], "press"],
+  vpress: ["Overhead", ["ohp", "db_ohp", "pike_pushup"], "overhead"],
+  hpull:  ["Row", ["bb_row", "db_row", "inv_row"], "pull"],
+  vpull:  ["Pull-up", ["pullup", "chinup", "pulldown"], "pull"],
+};
+const SESSION_SLOTS = [["squat", "hinge"], ["hpress", "vpress"], ["hpull", "vpull"]];
+const AUTO = { id: "auto", name: "Balanced session", items: [], auto: true };
+const SMALL_MUSCLES = new Set(["calves", "sideDelt", "rearDelt", "forearms", "abs", "obliques"]);
+function autoMode() { return S.settings.week?.mode === "auto"; }
+function buildSession(day) {
+  const ctx = adviceCtx(day), why = [], items = [], picked = [];
+  const used = {}; for (const x of allDoneSets(x => x.day < day)) used[x.ex.id] = (used[x.ex.id] || 0) + 1;
+  const lastOn = ids => { let best = null; for (const x of allDoneSets(x => x.day < day && ids.includes(x.ex.id))) if (!best || x.day > best) best = x.day; return best; };
+  // Your routines' numbers for an exercise, when it's in one; otherwise defaults by kind and role
+  const fromRoutine = id => { for (const r of Object.values(S.routines)) { const it = r.items.find(i => i.ex === id); if (it) return it; } return null; };
+  const numbers = (id, main) => {
+    const it = fromRoutine(id), E = exById(id);
+    if (it) return { sets: it.sets, r: it.r, rHi: it.rHi || it.r };
+    if (E.kind === "time") return { sets: 2, r: 30, rHi: 45 };
+    const small = Object.keys(E.muscles).every(m => SMALL_MUSCLES.has(m) || E.muscles[m] < 1);
+    if (E.kind === "bodyweight") return main ? { sets: 3, r: 5, rHi: 12 } : { sets: 2, r: 10, rHi: 20 };
+    return main ? { sets: 3, r: 6, rHi: 10 } : small ? { sets: 2, r: 12, rHi: 20 } : { sets: 2, r: 10, rHi: 15 };
+  };
+  const lagK = new Set(strengthLevels(day).groups.filter(g => g.lag).map(g => g.k));
+  const ok = (id, maxLvl) => canDo(id) && exerciseAdvice(id, day, { ...ctx, noAlts: true }).lvl <= maxLvl;
+  const pickIn = (sub, maxLvl) => SLOT_SUBS[sub][1].filter(id => ok(id, maxLvl)).sort((a, b) => (used[b] || 0) - (used[a] || 0))[0];
+  const tired = id => Object.entries(exById(id).muscles).some(([m, w]) => w >= 1 && readiness(ctx.fat[m]) === "fat");
+  for (const pair of SESSION_SLOTS) {
+    const opts = pair.map(sub => {
+      const id = pickIn(sub, 1), last = lastOn(SLOT_SUBS[sub][1]);
+      if (!id) return { sub, score: -1e3 };
+      const since = last ? Math.min(14, daysBetween(last, day)) : 14;
+      return { sub, id, score: since + (lagK.has(SLOT_SUBS[sub][2]) ? 4 : 0) - (tired(id) ? 10 : 0), since, last };
+    }).sort((a, b) => b.score - a.score);
+    const o = opts[0];
+    if (!o.id) continue;
+    picked.push(o.sub);
+    items.push({ ex: o.id, ...numbers(o.id, true), w: 0 });
+    why.push(`${SLOT_SUBS[o.sub][0].toLowerCase()}: ${o.last ? `last done ${agoText(o.last, day)}` : "not done recently"}${lagK.has(SLOT_SUBS[o.sub][2]) ? ", and it's behind your other movements" : ""}`);
+  }
+  // Accessories: fresh muscles furthest below their weekly range, spread over the lift days left this week
+  const proj = { ...ctx.wk };
+  for (const it of items) for (const [m, w] of Object.entries(exById(it.ex).muscles)) if (proj[m] != null) proj[m] += w * it.sets;
+  let liftsDone = 0; for (let i = 1; i <= 6; i++) if (liftedOn(addDays(day, -i))) liftsDone++;
+  const left = Math.max(1, ({ ...WEEK_DEFAULT, ...(S.settings.week || {}) }).lifts - liftsDone);
+  const need = m => MUSCLES[m].lo - proj[m];
+  const gaps = Object.keys(MUSCLES).filter(m => MUSCLES[m].lo > 0 && readiness(ctx.fat[m]) !== "fat" && need(m) >= 2).sort((a, b) => need(b) - need(a));
+  const maxAcc = isNewcomer(day) ? 1 : 2;
+  for (const m of gaps) {
+    if (items.length - picked.length >= maxAcc) break;
+    if (need(m) < 2) continue;   // an earlier accessory may have covered it
+    const pick = allEx().filter(e => (e.muscles[m] || 0) >= 1 && !items.some(x => x.ex === e.id) && ok(e.id, 0))
+      .sort((a, b) => Object.keys(a.muscles).length - Object.keys(b.muscles).length || (used[b.id] || 0) - (used[a.id] || 0))[0];
+    if (!pick) continue;
+    const n = numbers(pick.id, false), sets = Math.max(2, Math.min(3, Math.ceil(need(m) / left)));
+    items.push({ ex: pick.id, ...n, sets, w: 0 });
+    for (const [mm, w] of Object.entries(pick.muscles)) if (proj[mm] != null) proj[mm] += w * sets;
+    why.push(`${pick.name.toLowerCase()}: ${MUSCLES[m].n.toLowerCase()} at ${Math.round(ctx.wk[m])} of ${MUSCLES[m].lo}+ sets this week`);
+  }
+  const name = picked.length ? "Full body: " + picked.map((k, i) => i ? SLOT_SUBS[k][0].toLowerCase() : SLOT_SUBS[k][0]).join(", ") : AUTO.name;
+  return { ...AUTO, name, items, why };
 }
 
 // Look-ahead: replay planDay over the next n days, pretending each suggestion gets done. Nothing is saved.
@@ -1662,6 +1737,7 @@ function renderToday() {
       : p.kind === "cardio" ? `<button class="btn primary big" data-act="cl-open">+ Log cardio</button>` : "";
     const other = [];
     if (adapt?.changes.length) other.push(`<button class="chipbtn" data-act="routine" data-raw="1" data-id="${esc(p.routine.id)}">${esc(p.routine.name)} as written</button>`);
+    if (p.kind !== "done" && !p.routine?.auto) other.push(`<button class="chipbtn" data-act="routine" data-id="auto">${p.kind === "lift" ? "" : "Lift anyway: "}Balanced session</button>`);
     if (p.kind !== "done") p.alts.forEach(r => other.push(`<button class="chipbtn" data-act="routine" data-id="${esc(r.id)}">${p.kind === "lift" ? "" : "Lift anyway: "}${esc(r.name)}</button>`));
     const more = `
       ${adapt?.changes.length ? `<div class="adapt"><div class="label">Adjusted for today</div><ul>${adapt.changes.map(c => `<li>${c}</li>`).join("")}</ul></div>` : ""}
@@ -2244,6 +2320,8 @@ function renderPlan() {
       ${S.weekEdit ? `
       <p class="small muted" style="margin:0">No fixed days. Each morning the coach picks lift, cardio or rest from the last 7 days and how recovered you are. Lifting days are never back to back.</p>
       <div class="list">
+        <div class="row"><div class="l"><b>Lifting sessions come from</b><div class="small muted">${autoMode() ? "Built each day for balance: a lower, push and pull movement (alternating), plus what's short this week." : "Your routines, in rotation."}</div></div>
+          <div class="unit-toggle" role="group" aria-label="Lifting sessions come from">${[["auto", "Balanced"], ["routines", "Routines"]].map(([k, n]) => `<button type="button" data-act="wkmode" data-v="${k}" aria-pressed="${(autoMode() ? "auto" : "routines") === k}">${n}</button>`).join("")}</div></div>
         <div class="row"><div class="l"><b>Lifting sessions</b><div class="small muted">${liftsN} in the last 7 days</div></div>${stepper("lifts", wk.lifts, 2, 5)}</div>
         <div class="row"><div class="l"><b>Easy cardio sessions</b><div class="small muted">${cardioN} in the last 7 days (15+ min, walks excluded)</div></div>${stepper("cardio", wk.cardio, 0, 6)}</div>
         <div class="row"><div class="l"><b>Cardio minutes a week</b><div class="small muted">${cardioMinutes(addDays(t, -6), t)} in the last 7 days. Walks add their time in Zone 2 (stretches of ${Z2_BOUT}+ min).</div></div>${stepper("cardioMin", wk.cardioMin, 30, 300, 10)}</div>
@@ -2544,6 +2622,7 @@ document.addEventListener("click", async ev => {
     case "bppat": S.libPat = b.dataset.v; render(); break;
     case "bpclear": S.libSel = null; render(); break;
     case "planview": S.planView = b.dataset.v; try { localStorage.setItem("il-plan-view", S.planView); } catch {} render(); break;
+    case "wkmode": S.settings = { ...S.settings, week: { ...WEEK_DEFAULT, ...(S.settings.week || {}), mode: b.dataset.v } }; render(); await saveDoc("settings/main", S.settings); break;
     case "stdsex": S.settings = { ...S.settings, stdSex: S.settings.stdSex === b.dataset.v ? null : b.dataset.v }; render(); await saveDoc("settings/main", S.settings); break;
     case "unit": if (S.settings.unit !== b.dataset.v) { S.settings = { ...S.settings, unit: b.dataset.v }; render(); await saveDoc("settings/main", S.settings); } break;
     case "progview": S.progView = b.dataset.v; try { localStorage.setItem("il-prog-view", S.progView); } catch {} render(); break;
@@ -2552,7 +2631,7 @@ document.addEventListener("click", async ev => {
     case "add": if (S.addFor === "routine") { const ex = exById(b.dataset.id); S.addFor = null; S.rEdit.items.push({ ex: ex.id, sets: 3, r: ex.kind === "time" ? 30 : 8, ...(ex.kind === "time" ? {} : { rHi: 12 }), w: 0 }); openRoutineEditor(); break; }
       closeSheet(); mutate(s => { s.entries.push(newEntry(b.dataset.id, S.day)); s.finished = false; }); toast(`Added ${exById(b.dataset.id).name}`); break;
     case "routine": {
-      const r = S.routines[b.dataset.id], plan = b.dataset.raw ? { items: r.items, changes: [] } : adaptRoutine(r, S.day), dl = plan.deload;
+      const r = b.dataset.id === "auto" ? buildSession(S.day) : S.routines[b.dataset.id], plan = b.dataset.raw ? { items: r.items, changes: [] } : adaptRoutine(r, S.day), dl = plan.deload;
       const trim = dl ? null : trimReason(S.day); closeSheet();
       mutate(s => { if (trim) s.trim = trim; if (dl) { s.deload = true; s.trim = "deload week"; } for (const it of plan.items) { const e = newEntry(it.ex, S.day); const p = progression(it.ex, S.day);
         const top = p?.last ? Math.max(...p.last.e.sets.map(x => x.w || 0)) : (it.w || 0);

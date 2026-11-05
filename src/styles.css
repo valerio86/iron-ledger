@@ -382,3 +382,18 @@ details.fold.info > summary { font-size: 15px; display: inline-block; padding: 2
 .herov .big { font-size: 38px; font-weight: 500; line-height: 1.1; }
 .trend { margin-left: 10px; font-size: 16px; }
 .trend.up b { color: var(--good); } .trend.down b { color: var(--warn); }
+
+/* Strength levels */
+.lvscale, .lvrow { display: grid; grid-template-columns: 72px 1fr; column-gap: 10px; align-items: center; }
+.lvscale { grid-template-columns: 72px repeat(5, 1fr); font-size: 11px; margin-top: 4px; }
+.lvscale span { text-align: right; }
+.lvs { display: grid; gap: 10px; margin: 6px 0 10px; }
+.lvrow { grid-template-rows: auto auto; }
+.lvrow .lvn { font-weight: 600; grid-row: span 2; }
+.lvt { position: relative; height: 10px; border-radius: 5px; background: var(--line); overflow: hidden; }
+.lvt i { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--surface); z-index: 1; }
+.lvt b { position: absolute; left: 0; top: 0; bottom: 0; background: var(--accent); border-radius: 5px; }
+.lvrow.lag .lvt b { background: var(--warn); }
+.lvrow.none .lvt { opacity: .5; }
+.srcs { padding-left: 18px; }
+.srcs a { color: var(--accent); }

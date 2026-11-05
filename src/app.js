@@ -798,6 +798,87 @@ function bestSet(exId) {
 const PER_HAND = new Set(["db_bench", "incline_db", "db_fly", "db_ohp", "db_curl", "hammer", "lateral", "rev_fly", "split_squat", "lunge"]);
 function bodyweightRatio(exId, lb, bw) { return (PER_HAND.has(exId) ? lb * 2 : lb) / bw; }
 // noDeload: leave out deload sessions, which are light on purpose (for progression and stalls)
+/* Strength levels: where a lift sits against rough population standards, for your bodyweight and the standards you chose (settings.stdSex m|f).
+   Anchor lifts carry 1RM ÷ bodyweight bands (beginner … elite) for a 165 lb man / 135 lb woman, scaled to your bodyweight by bw^⅔:
+   strength follows muscle cross-section, so lighter lifters lift more per pound. Variants are a fixed fraction of their anchor's load.
+   Synthesised from widely published bodyweight-ratio standards, not from one dataset (docs/training-research.md §6): treat a level as ± half a step. */
+const LEVELS = ["Beginner", "Novice", "Intermediate", "Advanced", "Elite"];
+const STD_REF = { m: 165, f: 135 };
+const STD_ANCHOR = {
+  bench:    { m: [.5, .75, 1, 1.5, 2],         f: [.25, .5, .75, 1, 1.5] },
+  ohp:      { m: [.35, .55, .75, 1, 1.25],     f: [.2, .35, .5, .75, 1] },
+  squat:    { m: [.75, 1.25, 1.5, 2.25, 2.75], f: [.5, .75, 1.25, 1.5, 2] },
+  deadlift: { m: [1, 1.5, 2, 2.5, 3],          f: [.5, 1, 1.25, 1.75, 2.5] },
+  bb_row:   { m: [.5, .75, 1, 1.5, 1.75],      f: [.25, .4, .65, .9, 1.2] },
+  bb_curl:  { m: [.2, .4, .6, .85, 1.15],      f: [.1, .2, .4, .6, .85] },
+  skull:    { m: [.15, .3, .5, .75, 1],        f: [.1, .2, .35, .55, .75] },
+  lateral:  { m: [.05, .1, .17, .25, .35],     f: [.03, .06, .1, .16, .23] },   // per dumbbell
+};
+// Variant → [anchor, share of the anchor's load]. Per-hand lifts are per dumbbell, as they're logged.
+const STD_VARIANT = {
+  db_bench: ["bench", .42], incline_db: ["bench", .36], floor_press: ["bench", .9], db_ohp: ["ohp", .4],
+  front_squat: ["squat", .82], goblet: ["squat", .45], split_squat: ["squat", .3], lunge: ["squat", .28],
+  rdl: ["deadlift", .75], hip_thrust: ["deadlift", 1], db_row: ["bb_row", .5], pulldown: ["bb_row", 1.05],
+  db_curl: ["bb_curl", .45], hammer: ["bb_curl", .5], tri_oh: ["skull", 1], pushdown: ["skull", 1.1],
+};
+// Bodyweight lifts: strict reps in one set. Added weight counts as extra reps (Epley on bodyweight + load).
+const STD_REPS = {
+  pullup: { m: [1, 5, 12, 20, 28], f: [0, 1, 5, 10, 16] }, chinup: { m: [1, 6, 13, 21, 29], f: [0, 1, 6, 11, 17] },
+  pushup: { m: [5, 18, 35, 55, 75], f: [1, 8, 20, 35, 50] }, dip: { m: [2, 10, 20, 32, 42], f: [0, 3, 10, 18, 26] },
+};
+// Thresholds for the five levels: lb of 1RM (per hand where logged that way) or reps. null when there's no standard.
+function stdThresholds(exId, bw, sex) {
+  if (STD_REPS[exId]) return { kind: "reps", th: STD_REPS[exId][sex] };
+  const [a, share] = STD_ANCHOR[exId] ? [exId, 1] : STD_VARIANT[exId] || [];
+  if (!a) return null;
+  const ref = STD_REF[sex], scale = ref * Math.pow(bw / ref, 2 / 3) * share;
+  return { kind: "lb", th: STD_ANCHOR[a][sex].map(r => r * scale) };
+}
+// 0–1 below beginner, 1 = beginner … 5 = elite, straight-line in between
+function levelScore(v, th) {
+  if (v >= th[4]) return 5;
+  if (v < th[0]) return th[0] > 0 ? v / th[0] : 1;
+  const i = th.findIndex((t, k) => v >= t && v < th[k + 1]);
+  return i + 1 + (v - th[i]) / (th[i + 1] - th[i]);
+}
+function levelName(score) { return score < 1 ? "Below beginner" : LEVELS[Math.min(4, Math.floor(score) - 1)]; }
+// A lift's level from its best set in the last 8 weeks (deload sessions left out)
+function liftLevel(exId, day) {
+  const sex = S.settings.stdSex, bw = latestWeight(day)?.weightLb;
+  if (!sex || !bw) return null;
+  const std = stdThresholds(exId, bw, sex);
+  if (!std) return null;
+  const sets = doneSetsOf(historyFor(exId, addDays(day, 1), true).filter(r => r.day > addDays(day, -56)));
+  if (!sets.length) return null;
+  const v = Math.max(...sets.map(x => std.kind === "reps"
+    ? (x.w ? 30 * ((bw + x.w) / bw * (1 + x.r / 30) - 1) : x.r)
+    : e1rm(x.w, x.r)));
+  if (!(v > 0)) return null;
+  const score = levelScore(v, std.th);
+  return { exId, v, score, level: levelName(score), next: score < 5 ? std.th[Math.max(0, Math.floor(score))] : null, kind: std.kind, capped: std.kind === "lb" && atCap(exId) };
+}
+// Movement groups for balance: each takes its best-scoring lift
+const STD_GROUPS = [
+  ["press", "Press", ["bench", "db_bench", "incline_db", "floor_press", "pushup", "dip"]],
+  ["overhead", "Overhead", ["ohp", "db_ohp", "lateral"]],
+  ["pull", "Pull", ["bb_row", "db_row", "pulldown", "pullup", "chinup"]],
+  ["squat", "Squat", ["squat", "front_squat", "goblet", "split_squat", "lunge"]],
+  ["hinge", "Hinge", ["deadlift", "rdl", "hip_thrust"]],
+  ["arms", "Arms", ["bb_curl", "db_curl", "hammer", "skull", "tri_oh", "pushdown"]],
+];
+function strengthLevels(day) {
+  const groups = STD_GROUPS.map(([k, n, ids]) => {
+    const best = ids.map(id => liftLevel(id, day)).filter(Boolean).sort((a, b) => b.score - a.score)[0] || null;
+    return { k, n, best };
+  });
+  const scored = groups.filter(g => g.best).map(g => g.best.score).sort((a, b) => a - b);
+  const median = scored.length ? scored[Math.floor((scored.length - 1) / 2)] : null;   // the lower middle, so one strong group doesn't flag the rest
+  // A full level behind the others is worth prioritising; a lift at your gear's limit may be stronger than it looks
+  for (const g of groups) g.lag = scored.length >= 3 && g.best && !g.best.capped && g.best.score <= median - 1;
+  return { groups, median };
+}
+
+// noDeload: leave out deload sessions, which are light on purpose (for progression and stalls)
 function historyFor(exId, beforeDay, noDeload) {
   const rows = [];
   for (const [day, s] of Object.entries(S.sessions)) {
@@ -1113,6 +1194,10 @@ function adaptRoutine(r, day) {
     items.push({ ex, sets, r: sameKind ? it.r : E.kind === "time" ? 30 : 8, rHi: sameKind ? it.rHi : E.kind === "time" ? 45 : 12, w: ex === it.ex ? it.w : 0 });
     count(ex, sets);
   }
+  // A compound movement a level behind the others goes first, while you're fresh (arms stay at the end)
+  const lagIds = strengthLevels(day).groups.filter(g => g.lag && g.k !== "arms").flatMap(g => STD_GROUPS.find(x => x[0] === g.k)[2]);
+  const li = items.findIndex(x => lagIds.includes(x.ex));
+  if (li > 0) { const [x] = items.splice(li, 1); items.unshift(x); changes.push(`<b>${esc(exById(x.ex).name)}</b> first: that movement is a level behind your others`); }
   // Deload week: half the sets (rounded up), at ~90% of the weight (set at Start)
   if (deloadOn(day)) {
     const before = items.reduce((a, x) => a + x.sets, 0);
@@ -1216,9 +1301,9 @@ function coach(day) {
 
   // Deload: a lighter week every 5–6 weeks (plan rule), or sooner when warning signs pile up
   const dl = deloadOn(day), due = isToday && deloadDue(day);
-  if (dl) msgs.push({ lvl: "info", ic: "↓", t: `<b>Deload week</b>, day ${daysBetween(dl.start, day) + 1} of ${daysBetween(dl.start, dl.end) + 1} (back to normal ${fmtDay(addDays(dl.end, 1), { weekday: "long" })}). Same lifts, half the sets, about 90% weight. You won't lose strength in a week; this is when the last few weeks' work settles in.
+  if (dl) msgs.push({ lvl: "info", ic: "↓", t: `${srcBtn("deload")} <b>Deload week</b>, day ${daysBetween(dl.start, day) + 1} of ${daysBetween(dl.start, dl.end) + 1} (back to normal ${fmtDay(addDays(dl.end, 1), { weekday: "long" })}). Same lifts, half the sets, about 90% weight. You won't lose strength in a week; this is when the last few weeks' work settles in.
     ${isToday ? `<div class="swaps"><button class="chipbtn" data-act="deload-end">End it early</button></div>` : ""}` });
-  else if (due) msgs.push({ lvl: "warn", ic: "↓", t: `<b>Time for a deload week.</b> ${due.early ? `${due.weeks} weeks of full training, and ${due.signs.join(" and ")}.` : `${due.weeks} straight weeks of full training.`} For the next 7 days: the same lifts with half the sets at about 90% weight, easy cardio only. You'll come back stronger.
+  else if (due) msgs.push({ lvl: "warn", ic: "↓", t: `${srcBtn("deload")} <b>Time for a deload week.</b> ${due.early ? `${due.weeks} weeks of full training, and ${due.signs.join(" and ")}.` : `${due.weeks} straight weeks of full training.`} For the next 7 days: the same lifts with half the sets at about 90% weight, easy cardio only. You'll come back stronger.
     <div class="swaps"><button class="chipbtn primary" data-act="deload-start">Start deload week</button><button class="chipbtn" data-act="deload-snooze">Not yet</button></div>` });
 
   // Recovery trending the wrong way → cut cardio first, not lifting (plan rule)
@@ -1323,6 +1408,12 @@ function coach(day) {
 
   // 8. Stalls
   if (!dl) for (const ex of stalledLifts(day)) msgs.push({ lvl: "info", t: `<b>${esc(ex.name)}</b> hasn't moved in 3 weeks. Try a lighter week, or change the rep range.` });
+
+  // 8b. A movement a level behind the rest (Start already moves it to the front)
+  if (histDays >= 21 && !dl && isToday) {
+    const lag = strengthLevels(day).groups.filter(g => g.lag);
+    if (lag.length) msgs.push({ lvl: "info", t: `${srcBtn("levels")} <b>${lag.map(g => g.n).join(" and ")}</b> ${lag.length > 1 ? "are" : "is"} about a level behind your other movements (${lag.map(g => `${g.best.level.toLowerCase()} on ${esc(exById(g.best.exId).name.toLowerCase())}`).join(", ")}). Do ${lag.length > 1 ? "them" : "it"} first in the session while you're fresh.` });
+  }
 
   // 9. PRs today
   for (const e of sess?.entries || []) {
@@ -1773,7 +1864,9 @@ function renderProgress() {
     const es = s.entries.filter(e => doneSets(e).length);
     return `<button data-act="goto" data-day="${day}"><div class="l"><div><b>${fmtDay(day)}</b></div><div class="small muted">${es.map(e => esc(exById(e.ex).name)).join(" · ")}</div></div><span class="num small muted">${es.reduce((a, e) => a + doneSets(e).length, 0)} sets</span></button>`;
   }).join("");
+  const lvl = liftLevel(ex.id, today);
   const lifts = `
+    ${renderLevels(today)}
     <section class="block">
       <h2>Lift progress</h2>
       <select class="sel" id="progex" data-act="progex" aria-label="Exercise">${exIds.map(id => `<option value="${esc(id)}" ${id === S.progEx ? "selected" : ""}>${esc(exById(id).name)} (${doneEx[id]} sets)</option>`).join("")}</select>
@@ -1783,6 +1876,7 @@ function renderProgress() {
       </div>
       ${ex.kind === "weight" ? fold("est-info", `<span aria-label="About this estimate">ⓘ</span>`, `<div class="small muted">Your estimated 1-rep max, worked out from your best set each session. It's only accurate on sets close to failure, so treat it as a floor: your real max is probably higher.</div>`, "info") : ""}
       <div class="chart" id="chart1"></div>
+      ${lvl ? `<div class="small herosub"><span class="pill ${lvl.score >= 3 ? "good" : "neutral"}">${lvl.level}${lvl.capped ? "+" : ""}</span>${lvl.next ? ` <span class="muted">${lvl.kind === "reps" ? `${Math.ceil(lvl.next)} reps` : `${fmtW(lvl.next)}${PER_HAND.has(ex.id) ? " each" : ""} est. max`} for ${LEVELS[Math.floor(lvl.score)]}</span>` : ""}</div>` : ""}
       <div class="small muted num herosub">Best ${fmtScore(best)} ${scoreUnit}${bs ? ` · from ${toDisp(bs.w)} × ${bs.r}` : ""}${ex.kind === "weight" && latestWeight(today) ? ` · ${bodyweightRatio(ex.id, best, latestWeight(today).weightLb).toFixed(2)}× bodyweight${PER_HAND.has(ex.id) ? " · both hands" : ""}` : ""}</div>
       <div class="label">${volName}</div>
       ${volLine}
@@ -1913,6 +2007,28 @@ function renderMuscleBars(today) {
 }
 function entryVolume(e, ex) { return doneSets(e).reduce((a, s) => a + (ex.kind === "weight" ? (s.w || 0) * s.r : s.r), 0); }
 // Weekly sets per muscle over the last 8 weeks, coloured against each muscle's target range
+// Strength levels by movement: a 5-step track per group, the lift behind it, and the group that's behind
+function renderLevels(today) {
+  if (!S.settings.stdSex) return `<section class="block"><h2>Strength levels ${srcBtn("levels")}</h2><p class="small muted" style="margin:0">See how each movement compares with beginner-to-elite standards for your bodyweight. Pick men's or women's standards in Settings to turn this on.</p></section>`;
+  if (!latestWeight(today)) return "";
+  const { groups } = strengthLevels(today), has = groups.filter(g => g.best);
+  if (!has.length) return "";
+  const row = g => {
+    if (!g.best) return `<div class="lvrow none"><span class="lvn">${g.n}</span><span class="lvt"></span><span class="small muted">not logged</span></div>`;
+    const pct = Math.min(100, g.best.score / 5 * 100);
+    return `<div class="lvrow${g.lag ? " lag" : ""}"><span class="lvn">${g.n}</span>
+      <span class="lvt" role="img" aria-label="${g.n}: ${g.best.level}, from ${esc(exById(g.best.exId).name)}">${[1, 2, 3, 4].map(i => `<i style="left:${i * 20}%"></i>`).join("")}<b style="width:${pct}%"></b></span>
+      <span class="small"><b>${g.best.level}${g.best.capped ? "+" : ""}</b> <span class="muted">${esc(exById(g.best.exId).name)}</span></span></div>`;
+  };
+  const lag = groups.filter(g => g.lag);
+  return `<section class="block">
+    <h2>Strength levels ${srcBtn("levels")}</h2>
+    <div class="lvscale small muted"><span></span><span>Beg.</span><span>Nov.</span><span>Int.</span><span>Adv.</span><span>Elite</span></div>
+    <div class="lvs">${groups.map(row).join("")}</div>
+    ${lag.length ? `<div class="hint warn small">${lag.map(g => `<b>${g.n}</b>`).join(" and ")} ${lag.length > 1 ? "are" : "is"} a level or more behind your other movements. Worth giving ${lag.length > 1 ? "them" : "it"} priority.</div>` : ""}
+    <p class="small muted" style="margin:0">Rough levels from your best set in the last 8 weeks. "+" means you're at your gear's limit, so you may be stronger than this.</p>
+  </section>`;
+}
 function renderMuscleWeeks(today) {
   const start = firstDay(); if (!start) return "";
   const N = 8, weeks = [];
@@ -1927,7 +2043,7 @@ function renderMuscleWeeks(today) {
     }).join(""); }).join("");
   return `
     <section class="block">
-      <h2>Sets per muscle · weekly trend</h2>
+      <h2>Sets per muscle · weekly trend ${srcBtn("volume")}</h2>
       <p class="small muted" style="margin:0">Each column is the 7 days ending on that date; "now" is the past 7 days. Counted the same way as the bars below. Watch for a muscle that stays amber week after week.</p>
       <div class="legend small"><span><i class="sw ok"></i>In range</span><span><i class="sw lo"></i>Below range</span><span><i class="sw hi"></i>Over the cap</span></div>
       <div class="mw">${head}${rows}</div>
@@ -2082,7 +2198,9 @@ function renderPlan() {
     <section class="block">
       <h2>Settings</h2>
       <div class="list">${(S.settings.tipsSeen || []).length ? `<div class="row"><div class="l"><b>Tips</b><div class="small muted">The short how-to notes shown the first time you use each screen.</div></div><button class="linkbtn" data-act="tipsreset">Show again</button></div>` : ""}<div class="row"><div class="l"><b>Weights in</b><div class="small muted">Only changes what you see. Your log converts either way.</div></div>
-        <div class="unit-toggle" role="group" aria-label="Units">${["lb", "kg"].map(u => `<button type="button" data-act="unit" data-v="${u}" aria-pressed="${unit() === u}">${u}</button>`).join("")}</div></div></div>
+        <div class="unit-toggle" role="group" aria-label="Units">${["lb", "kg"].map(u => `<button type="button" data-act="unit" data-v="${u}" aria-pressed="${unit() === u}">${u}</button>`).join("")}</div></div>
+        <div class="row"><div class="l"><b>Strength standards</b><div class="small muted">Which standards your strength levels compare against. Off until you pick.</div></div>
+        <div class="unit-toggle" role="group" aria-label="Strength standards">${[["m", "Men's"], ["f", "Women's"]].map(([k, n]) => `<button type="button" data-act="stdsex" data-v="${k}" aria-pressed="${S.settings.stdSex === k}">${n}</button>`).join("")}</div></div></div>
     </section>
     <section class="block">
       <h2>Connections</h2>
@@ -2321,6 +2439,37 @@ async function saveRoutine() {
   closeSheet(true); render(); await saveDoc("routines/" + id, doc); toast(`Saved ${name}`);
 }
 
+/* ---------- Sources: the evidence behind a rule, one tap away ---------- */
+const SOURCES = {
+  deload: { t: "Why a deload week", p: [
+    "A deload is a planned lighter stretch that lets fatigue clear so the next block of training lands better. Coaches agree it can be scheduled (every 4–6 weeks is common) or triggered by signs of fatigue, and that the main lever is <b>fewer sets</b>, with weights the same or a little lower and the same number of training days.",
+    "A full week off isn't the same thing: in one trial, a week of no lifting slightly slowed strength gains compared with training straight through. So Iron Ledger keeps you lifting, just less."],
+    refs: [["Bell et al. 2023, Delphi consensus on deloading (Sports Medicine – Open)", "https://doi.org/10.1186/s40798-023-00633-0"], ["Coleman et al. 2024, a one-week deload during training (PeerJ)", "https://peerj.com/articles/16777"]] },
+  volume: { t: "Sets per muscle", p: [
+    "Weekly hard sets per muscle drive both growth and strength, with diminishing returns: about 10–20 sets a week covers most of the benefit, and strength flattens out sooner than size. Newer lifters get most of it from the low end.",
+    "A set counts fully for the muscle it mainly works and partly for helpers (½ for a row's biceps, for example). That fractional count matched results best in the largest analysis so far."],
+    refs: [["Pelland et al. 2024, volume and frequency dose–response meta-regressions (SportRxiv)", "https://sportrxiv.org/index.php/server/preprint/view/537"], ["Ralston et al. 2017, weekly set volume and strength (Sports Medicine)", "https://pubmed.ncbi.nlm.nih.gov/28755103/"]] },
+  reps: { t: "Reps, load and effort", p: [
+    "Muscles grow about as well with light or heavy weights, as long as sets end close to failure; moderate loads (roughly 6–15 reps) are simply the most time-efficient. Strength is more specific: heavier, lower-rep work on the lift itself builds a bigger 1-rep max.",
+    "How close to failure matters more for size than for strength. Stopping with 1–3 reps left is a good default; strength work can stop 3–5 short."],
+    refs: [["Schoenfeld et al. 2021, the repetition continuum re-examined (Sports)", "https://doi.org/10.3390/sports9020032"], ["Robinson et al. 2024, proximity to failure (FAU summary)", "https://www.fau.edu/newsdesk/articles/muscle-growth-strength-study"]] },
+  levels: { t: "Strength levels", p: [
+    "Each lift's level compares your best set in the last 8 weeks (as an estimated 1-rep max, or reps for bodyweight moves) with bodyweight-ratio bands for beginner, novice, intermediate, advanced and elite, scaled to your weight.",
+    "The bands are Iron Ledger's own blend of widely published standards (several online calculators, the Kilgore tables on ExRx), and dumbbell or variant lifts are converted from their barbell versions. Treat a level as give or take half a step. They're for spotting balance, not a test: no study links particular ratios between lifts to injury.",
+    "A movement a full level behind your others gets flagged, so it can get more attention."],
+    refs: [["ExRx strength standards (Kilgore)", "https://exrx.net/Questions/StrengthTests"], ["van den Hoek et al. 2024, powerlifting norms from 809,986 entries (JSAMS)", "https://pubmed.ncbi.nlm.nih.gov/39060209/"], ["Strength Level, community standards", "https://strengthlevel.com/strength-standards"]] },
+};
+function srcBtn(key) { return `<button class="help src" data-act="src" data-k="${key}" aria-label="Sources: ${esc(SOURCES[key].t)}">?</button>`; }
+function openSource(key) {
+  const x = SOURCES[key]; if (!x) return;
+  $("#help").innerHTML = `<div class="sheet-bg" data-act="closehelp"><div class="sheet guide" role="dialog" aria-modal="true" aria-labelledby="src-title">
+    <div class="sh"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><h2 id="src-title">${x.t}</h2><button class="x iconbtn" data-act="closehelp" aria-label="Close">×</button></div></div>
+    <div class="sb">${x.p.map(t => `<p>${t}</p>`).join("")}
+      <h3>Sources</h3><ul class="srcs">${x.refs.map(([n, u]) => `<li><a href="${u}" target="_blank" rel="noopener">${esc(n)}</a></li>`).join("")}</ul>
+      <p class="small muted">Summaries of the research, not medical advice.</p></div></div></div>`;
+  $("#help .x").focus();
+}
+
 /* ---------- Exercise guide panel ---------- */
 function helpBtn(exId, name) { return `<button class="help" data-act="help" data-id="${esc(exId)}" aria-label="How to do ${esc(name)}">?</button>`; }
 function openHelp(exId) {
@@ -2365,6 +2514,7 @@ document.addEventListener("click", async ev => {
   const act = b.dataset.act, i = +b.dataset.i, j = +b.dataset.j;
   if ((act === "closesheet" || act === "closehelp") && ev.target !== b && b.classList.contains("sheet-bg")) return;
   if (act === "help") { openHelp(b.dataset.id); return; }
+  if (act === "src") { openSource(b.dataset.k); return; }
   if (act === "closehelp") { closeHelp(); return; }
   const E = () => sessionDoc(S.day).entries[i];
   switch (act) {
@@ -2394,6 +2544,7 @@ document.addEventListener("click", async ev => {
     case "bppat": S.libPat = b.dataset.v; render(); break;
     case "bpclear": S.libSel = null; render(); break;
     case "planview": S.planView = b.dataset.v; try { localStorage.setItem("il-plan-view", S.planView); } catch {} render(); break;
+    case "stdsex": S.settings = { ...S.settings, stdSex: S.settings.stdSex === b.dataset.v ? null : b.dataset.v }; render(); await saveDoc("settings/main", S.settings); break;
     case "unit": if (S.settings.unit !== b.dataset.v) { S.settings = { ...S.settings, unit: b.dataset.v }; render(); await saveDoc("settings/main", S.settings); } break;
     case "progview": S.progView = b.dataset.v; try { localStorage.setItem("il-prog-view", S.progView); } catch {} render(); break;
     case "openroutines": openRoutines(); break;

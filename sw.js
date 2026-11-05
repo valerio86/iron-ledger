@@ -13,11 +13,11 @@ self.addEventListener("fetch", e => {
   const url = new URL(req.url);
   const font = url.host === "fonts.googleapis.com" || url.host === "fonts.gstatic.com";
   if (url.origin !== location.origin && !font) return;
-  // App files: network first so updates show on the next open; cache when offline. Fonts never change: cache first.
+  // App files: network first so updates show on the next open (revalidated, so the browser's HTTP cache can't serve a stale copy); cache when offline. Fonts never change: cache first.
   e.respondWith(caches.open(VERSION).then(async c => {
     const hit = () => c.match(req, { ignoreSearch: !font });
     if (font) { const h = await hit(); if (h) return h; }
-    try { const r = await fetch(req); if (r.ok || r.type === "opaque") c.put(req, r.clone()); return r; }
+    try { const r = await fetch(font ? req : new Request(req.url, { cache: "no-cache" })); if (r.ok || r.type === "opaque") c.put(req, r.clone()); return r; }
     catch (err) { const h = await hit(); if (h) return h; throw err; }
   }));
 });

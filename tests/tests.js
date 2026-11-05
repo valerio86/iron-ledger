@@ -273,6 +273,10 @@ function run() {
     const sessions = { ...session(ago(2), entry("db_row", 40, 8, "solid", 4), entry("chinup", 0, 8, "solid", 4)), ...session(ago(4), entry("db_row", 40, 8, "solid", 4)) };
     scene({ sessions, settings: dbGear }, () => ok(!buildSession(today).items.some(x => ["db_curl", "hammer", "bb_curl"].includes(x.ex)), "curls added"));
   });
+  test("balanced: accessories don't repeat a main slot's movement", () => scene({ settings: dbGear }, () => {
+    const b = buildSession(today), mainSubs = b.items.slice(0, 3).map(x => Object.keys(SLOT_SUBS).find(k => SLOT_SUBS[k][1].includes(x.ex)));
+    for (const x of b.items.slice(3)) ok(!mainSubs.some(k => SLOT_SUBS[k][1].includes(x.ex)), `${x.ex} repeats a main movement`);
+  }));
   test("balanced: the planner uses it, and Start's adapt adds no routine top-ups", () => scene({ settings: dbGear }, () => {
     const p = planDay(today); eq(p.kind, "lift"); ok(p.routine.auto, "built"); ok(p.title.startsWith("Full body"), p.title);
     const a = adaptRoutine(p.routine, today); ok(!a.changes.some(c => c.startsWith("+ ")), "no top-ups");

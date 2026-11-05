@@ -1304,10 +1304,11 @@ function buildSession(day) {
   const need = m => MUSCLES[m].lo - proj[m];
   const gaps = Object.keys(MUSCLES).filter(m => MUSCLES[m].lo > 0 && readiness(ctx.fat[m]) !== "fat" && need(m) >= 2).sort((a, b) => need(b) - need(a));
   const maxAcc = isNewcomer(day) ? 1 : 2;
+  const mainIds = new Set(picked.flatMap(k => SLOT_SUBS[k][1]));   // no goblet squat after a split squat: a second helping of the same movement isn't an accessory
   for (const m of gaps) {
     if (items.length - picked.length >= maxAcc) break;
     if (need(m) < 2) continue;   // an earlier accessory may have covered it
-    const pick = allEx().filter(e => (e.muscles[m] || 0) >= 1 && !items.some(x => x.ex === e.id) && ok(e.id, 0))
+    const pick = allEx().filter(e => (e.muscles[m] || 0) >= 1 && !items.some(x => x.ex === e.id) && !mainIds.has(e.id) && ok(e.id, 0))
       .sort((a, b) => Object.keys(a.muscles).length - Object.keys(b.muscles).length || (used[b.id] || 0) - (used[a.id] || 0))[0];
     if (!pick) continue;
     const n = numbers(pick.id, false), sets = Math.max(2, Math.min(3, Math.ceil(need(m) / left)));

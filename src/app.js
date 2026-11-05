@@ -1268,7 +1268,14 @@ function autoMode() { return S.settings.week?.mode === "auto"; }
 function buildSession(day) {
   const ctx = adviceCtx(day), why = [], items = [], picked = [];
   const used = {}; for (const x of allDoneSets(x => x.day < day)) used[x.ex.id] = (used[x.ex.id] || 0) + 1;
-  const lastOn = ids => { let best = null; for (const x of allDoneSets(x => x.day < day && ids.includes(x.ex.id))) if (!best || x.day > best) best = x.day; return best; };
+  // Last day a movement was trained. A balanced session records its main slots (session.slots), so its accessories
+  // (a single-leg RDL on a squat day) don't count as that movement's turn.
+  const lastOn = sub => { let best = null;
+    for (const x of allDoneSets(x => x.day < day && SLOT_SUBS[sub][1].includes(x.ex.id))) {
+      const sl = S.sessions[x.day]?.slots;
+      if ((!sl || sl.includes(sub)) && (!best || x.day > best)) best = x.day;
+    }
+    return best; };
   // Your routines' numbers for an exercise, when it's in one; otherwise defaults by kind and role
   const fromRoutine = id => { for (const r of Object.values(S.routines)) { const it = r.items.find(i => i.ex === id); if (it) return it; } return null; };
   const numbers = (id, main) => {
@@ -1285,7 +1292,7 @@ function buildSession(day) {
   const tired = id => Object.entries(exById(id).muscles).some(([m, w]) => w >= 1 && readiness(ctx.fat[m]) === "fat");
   for (const pair of SESSION_SLOTS) {
     const opts = pair.map(sub => {
-      const id = pickIn(sub, 1), last = lastOn(SLOT_SUBS[sub][1]);
+      const id = pickIn(sub, 1), last = lastOn(sub);
       if (!id) return { sub, score: -1e3 };
       const since = last ? Math.min(14, daysBetween(last, day)) : 14;
       return { sub, id, score: since + (lagK.has(SLOT_SUBS[sub][2]) ? 4 : 0) - (tired(id) ? 10 : 0), since, last };
@@ -1317,7 +1324,7 @@ function buildSession(day) {
     why.push(`${pick.name.toLowerCase()}: ${MUSCLES[m].n.toLowerCase()} at ${Math.round(ctx.wk[m])} of ${MUSCLES[m].lo}+ sets this week`);
   }
   const name = picked.length ? "Full body: " + picked.map((k, i) => i ? SLOT_SUBS[k][0].toLowerCase() : SLOT_SUBS[k][0]).join(", ") : AUTO.name;
-  return { ...AUTO, name, items, why };
+  return { ...AUTO, name, items, why, slots: picked };
 }
 
 // Look-ahead: replay planDay over the next n days, pretending each suggestion gets done. Nothing is saved.
@@ -1335,7 +1342,7 @@ function forecast(day, n) {
       if (i) out.push({ day: k, p });
       if (p.kind === "lift" && p.routine) {
         if (!(k in saved)) saved[k] = S.sessions[k];
-        S.sessions[k] = { date: k, routine: p.routine.id, entries: p.routine.items.map(it => ({ ex: it.ex, effort: "solid",
+        S.sessions[k] = { date: k, routine: p.routine.id, ...(p.routine.slots ? { slots: p.routine.slots } : {}), entries: p.routine.items.map(it => ({ ex: it.ex, effort: "solid",
           sets: Array.from({ length: it.sets }, () => ({ w: it.w || 0, r: it.r, done: true, t: parseDay(k).getTime() })) })) };
         if (p.addon) fakeCardio(k, lowImpactWords(), p.addon.mins);
       } else if (p.kind === "cardio") fakeCardio(k, p.title, p.mins || 30);
@@ -2642,7 +2649,7 @@ document.addEventListener("click", async ev => {
         const r = dl ? it.r : p?.capped ? p.nextR : p?.resetReps ? it.r : Math.min(it.rHi || lastR, Math.max(it.r, lastR));
         e.sets = Array.from({ length: trim ? Math.max(1, it.sets - 1) : it.sets }, () => ({ w, r, done: false }));
         if (it.rHi) { e.rLo = it.r; e.rHi = it.rHi; }
-        s.entries.push(e); } s.routine = r.id; s.finished = false; });
+        s.entries.push(e); } s.routine = r.id; if (r.slots) s.slots = r.slots; s.finished = false; });
       toast(`Started ${r.name}${dl ? " as a deload" : plan.changes.length ? ` with ${plan.changes.length} change${plan.changes.length > 1 ? "s" : ""} for today` : ""}${trim ? `, one set lighter (${trim})` : ""}`); break;
     }
     case "deload-start": {

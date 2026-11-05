@@ -269,6 +269,10 @@ function run() {
     const next = scene({ sessions, settings: dbGear }, () => buildSession(today).items.slice(0, 3).map(x => x.ex));
     first.forEach((id, i) => ok(id !== next[i], `slot ${i}: ${id} twice`));
   });
+  test("balanced: an accessory doesn't count as that movement's turn", () => {
+    const sessions = { [ago(2)]: { date: ago(2), routine: "auto", slots: ["squat", "hpress", "hpull"], entries: [entry("goblet", 30, 8), entry("db_bench", 30, 8), entry("db_row", 30, 8), entry("sl_rdl", 0, 10)] } };
+    scene({ sessions, settings: dbGear }, () => eq(exById(buildSession(today).items[0].ex).pattern, "hinge"));
+  });
   test("balanced: no curls when rows and pull-ups already cover biceps", () => {
     const sessions = { ...session(ago(2), entry("db_row", 40, 8, "solid", 4), entry("chinup", 0, 8, "solid", 4)), ...session(ago(4), entry("db_row", 40, 8, "solid", 4)) };
     scene({ sessions, settings: dbGear }, () => ok(!buildSession(today).items.some(x => ["db_curl", "hammer", "bb_curl"].includes(x.ex)), "curls added"));

@@ -16,12 +16,15 @@
   --font-body: "Public Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-data: "IBM Plex Mono", ui-monospace, Menlo, monospace;
   --r: 10px;
+  /* Strength levels, beginner → elite: one-hue ordinal ramp (validated: monotone, ΔL ≥ .06, light end 2.1:1 on surface) */
+  --lv0: #c3c8cc; --lv1: #86b6ef; --lv2: #5598e7; --lv3: #2a78d6; --lv4: #1c5cab; --lv5: #104281;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --bg: #111416; --surface: #1a1e21; --sunk: #23282c; --fg: #e9ecee; --muted: #9aa3aa; --line: #2e353a;
     --accent: #6fa3f2; --accent-ink: #0b1626; --accent-soft: #1c2c45;
     --good: #5cc98b; --good-soft: #17301f; --warn: #e2b04f; --warn-soft: #34290f; --bad: #f08a80; --bad-soft: #3a1a17;
+    --lv0: #3f464b; --lv1: #184f95; --lv2: #256abf; --lv3: #3987e5; --lv4: #6da7ec; --lv5: #9ec5f4;
     color-scheme: dark;
   }
 }
@@ -29,6 +32,7 @@
   --bg: #111416; --surface: #1a1e21; --sunk: #23282c; --fg: #e9ecee; --muted: #9aa3aa; --line: #2e353a;
   --accent: #6fa3f2; --accent-ink: #0b1626; --accent-soft: #1c2c45;
   --good: #5cc98b; --good-soft: #17301f; --warn: #e2b04f; --warn-soft: #34290f; --bad: #f08a80; --bad-soft: #3a1a17;
+  --lv0: #3f464b; --lv1: #184f95; --lv2: #256abf; --lv3: #3987e5; --lv4: #6da7ec; --lv5: #9ec5f4;
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
@@ -383,17 +387,27 @@ details.fold.info > summary { font-size: 15px; display: inline-block; padding: 2
 .trend { margin-left: 10px; font-size: 16px; }
 .trend.up b { color: var(--good); } .trend.down b { color: var(--warn); }
 
-/* Strength levels */
-.lvscale, .lvrow { display: grid; grid-template-columns: 72px 1fr; column-gap: 10px; align-items: center; }
-.lvscale { grid-template-columns: 72px repeat(5, 1fr); font-size: 11px; margin-top: 4px; }
-.lvscale span { text-align: right; }
-.lvs { display: grid; gap: 10px; margin: 6px 0 10px; }
-.lvrow { grid-template-rows: auto auto; }
-.lvrow .lvn { font-weight: 600; grid-row: span 2; }
-.lvt { position: relative; height: 10px; border-radius: 5px; background: var(--line); overflow: hidden; }
-.lvt i { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--surface); z-index: 1; }
-.lvt b { position: absolute; left: 0; top: 0; bottom: 0; background: var(--accent); border-radius: 5px; }
-.lvrow.lag .lvt b { background: var(--warn); }
-.lvrow.none .lvt { opacity: .5; }
+/* Strength levels: a row per muscle or movement (name and level, then a full-width track). Five zones on the track,
+   below beginner → advanced; a full bar is elite. The bar's length is the level, its colour the zone it reached */
+.lvseg { margin: 0 0 8px; }
+.lvs { display: grid; gap: 2px; margin: 4px 0 2px; }
+.lvrow { display: grid; grid-template-columns: 1fr auto; grid-template-areas: "n l" "t t"; row-gap: 4px; align-items: baseline; width: 100%; padding: 5px 6px; margin: 0 -6px; width: calc(100% + 12px); border: 0; border-radius: 6px; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.lvrow:hover, .lvrow.on { background: var(--sunk); }
+.lvrow .lvn { grid-area: n; font-weight: 600; font-size: 13px; }
+.lvrow .lvl { grid-area: l; font-size: 12px; }
+.lvrow .lvt { grid-area: t; }
+.lvrow.lag .lvn, .lvrow.lag .lvl { color: var(--warn); }
+.lvrow.none { cursor: default; }
+.lvrow.none .lvl { color: var(--muted); }
+.lvt { position: relative; height: 10px; display: grid; grid-template-columns: repeat(5, 1fr); gap: 2px; }
+.lvt > i { background: var(--sunk); border-radius: 2px; }
+.lvrow:hover .lvt > i, .lvrow.on .lvt > i { background: var(--surface); }
+.lvt > b { position: absolute; left: 0; top: 1px; bottom: 1px; border-radius: 0 4px 4px 0; box-shadow: 0 0 0 2px var(--surface); }
+.lvt > b.l0 { background: var(--lv0); } .lvt > b.l1 { background: var(--lv1); } .lvt > b.l2 { background: var(--lv2); } .lvt > b.l3 { background: var(--lv3); } .lvt > b.l4 { background: var(--lv4); } .lvt > b.l5 { background: var(--lv5); }
+.lvticks { position: relative; height: 14px; font-size: 11px; color: var(--muted); }
+.lvticks span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+.lvticks span:last-child { transform: translateX(-100%); }
+.lvkey { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--muted); margin: 2px 0 8px; }
+.lvkey i { display: inline-block; width: 12px; height: 8px; border-radius: 2px; margin-right: 4px; vertical-align: 0; }
 .srcs { padding-left: 18px; }
 .srcs a { color: var(--accent); }

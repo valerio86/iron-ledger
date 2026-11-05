@@ -251,7 +251,13 @@ function run() {
     eq(groups.filter(g => g.lag).map(g => g.k), ["squat"]);
     S.routines = { r: { id: "r", name: "R", items: [{ ex: "db_bench", sets: 3, r: 8, w: 0 }, { ex: "goblet", sets: 3, r: 8, w: 0 }] } };
     const a = adaptRoutine(S.routines.r, today); eq(a.items[0].ex, "goblet"); ok(a.changes.some(c => c.includes("first")));
-    ok(renderLevels(today).includes("lvrow lag"), "card marks it");
+    S.lvView = "movement"; try { ok(renderLevels(today).includes("lvrow lag"), "card marks it"); } finally { S.lvView = null; }
+  }));
+  test("levels by muscle: best main-mover lift per muscle, uncovered muscles listed", () => scene(lagScene, () => {
+    const { rows } = muscleLevels(today), by = Object.fromEntries(rows.map(r => [r.k, r]));
+    eq(by.chest.best.exId, "db_bench"); eq(by.biceps.best.exId, "db_curl"); ok(by.quads.lag, "quads behind");
+    ok(!by.calves.covered && !by.calves.best, "no calf standard");
+    const h = renderLevels(today); ok(h.includes("By muscle") && h.includes("No standards for") && h.includes("lvrow lag"), "card");
   }));
   test("sources: every source opens with links", () => { for (const k of Object.keys(SOURCES)) { openSource(k); ok($("#help .srcs a"), k); } closeHelp(); });
 

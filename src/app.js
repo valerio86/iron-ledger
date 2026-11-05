@@ -746,17 +746,32 @@ function allDoneSets(filterFn) {
 }
 
 // Residual fatigue per muscle at time `at`, from sets done strictly before `before`.
+/* Age (settings.birthYear, optional). Strength standards are for ages 23–39; outside that range they're divided by the
+   powerlifting age coefficients (McCulloch for masters 40+, Foster for juniors), so a 60-year-old's 100 lb counts like 134.
+   Past 40, muscles also take a little longer to recover: fatigue fades 0.5% slower per year, up to 25%. */
+const AGE_MASTERS = [1.000, 1.010, 1.020, 1.031, 1.043, 1.055, 1.068, 1.082, 1.097, 1.113, 1.130, 1.147, 1.165, 1.184, 1.204, 1.225, 1.246, 1.268, 1.291, 1.315,
+  1.340, 1.366, 1.393, 1.421, 1.450, 1.480, 1.511, 1.543, 1.576, 1.610, 1.645, 1.681, 1.718, 1.756, 1.795, 1.835, 1.876, 1.918, 1.961, 2.005,
+  2.050, 2.096, 2.143, 2.190, 2.238, 2.287, 2.337, 2.388, 2.440, 2.494, 2.549];   // ages 40–90
+const AGE_JUNIOR = { 14: 1.23, 15: 1.18, 16: 1.13, 17: 1.08, 18: 1.06, 19: 1.04, 20: 1.03, 21: 1.02, 22: 1.01 };
+function ageOn(day) { const y = S.settings.birthYear; return y ? parseDay(day).getFullYear() - y : null; }
+function ageCoef(age) {
+  if (age == null || (age >= 23 && age < 40)) return 1;
+  if (age < 23) return AGE_JUNIOR[Math.max(14, age)];
+  return AGE_MASTERS[Math.min(90, age) - 40];
+}
+function recoveryScale() { const a = ageOn(dayKey(new Date())); return a > 40 ? Math.min(1.25, 1 + .005 * (a - 40)) : 1; }
+
 function fatigueAt(at, before = at) {
-  const f = Object.fromEntries(Object.keys(MUSCLES).map(m => [m, 0]));
+  const f = Object.fromEntries(Object.keys(MUSCLES).map(m => [m, 0])), rs = recoveryScale();
   for (const x of allDoneSets(x => x.t < before && x.t > at - 6 * 864e5)) {
     const ef = EFFORT[x.e.effort]?.f ?? 1;
     const dt = (at - x.t) / 36e5;
-    for (const [m, w] of Object.entries(x.ex.muscles)) if (f[m] != null) f[m] += w * ef * Math.exp(-dt / MUSCLES[m].tau);
+    for (const [m, w] of Object.entries(x.ex.muscles)) if (f[m] != null) f[m] += w * ef * Math.exp(-dt / (MUSCLES[m].tau * rs));
   }
   for (const a of S.cardio) {
     if (a.t >= before || a.t <= at - 6 * 864e5 || a.re < CARDIO_MIN_EFFORT) continue;
     const eq = Math.min(6, a.re / 10), dt = (at - a.t) / 36e5;
-    for (const [m, w] of Object.entries(a.muscles)) if (f[m] != null) f[m] += w * eq * Math.exp(-dt / MUSCLES[m].tau);
+    for (const [m, w] of Object.entries(a.muscles)) if (f[m] != null) f[m] += w * eq * Math.exp(-dt / (MUSCLES[m].tau * rs));
   }
   return f;
 }
@@ -826,12 +841,13 @@ const STD_REPS = {
   pushup: { m: [5, 18, 35, 55, 75], f: [1, 8, 20, 35, 50] }, dip: { m: [2, 10, 20, 32, 42], f: [0, 3, 10, 18, 26] },
 };
 // Thresholds for the five levels: lb of 1RM (per hand where logged that way) or reps. null when there's no standard.
-function stdThresholds(exId, bw, sex) {
-  if (STD_REPS[exId]) return { kind: "reps", th: STD_REPS[exId][sex] };
+function stdThresholds(exId, bw, sex, age) {
+  const k = ageCoef(age);
+  if (STD_REPS[exId]) return { kind: "reps", th: STD_REPS[exId][sex].map(r => r / k) };
   const [a, share] = STD_ANCHOR[exId] ? [exId, 1] : STD_VARIANT[exId] || [];
   if (!a) return null;
   const ref = STD_REF[sex], scale = ref * Math.pow(bw / ref, 2 / 3) * share;
-  return { kind: "lb", th: STD_ANCHOR[a][sex].map(r => r * scale) };
+  return { kind: "lb", th: STD_ANCHOR[a][sex].map(r => r * scale / k) };
 }
 // 0–1 below beginner, 1 = beginner … 5 = elite, straight-line in between
 function levelScore(v, th) {
@@ -845,7 +861,7 @@ function levelName(score) { return score < 1 ? "Below beginner" : LEVELS[Math.mi
 function liftLevel(exId, day) {
   const sex = S.settings.stdSex, bw = latestWeight(day)?.weightLb;
   if (!sex || !bw) return null;
-  const std = stdThresholds(exId, bw, sex);
+  const std = stdThresholds(exId, bw, sex, ageOn(day));
   if (!std) return null;
   const sets = doneSetsOf(historyFor(exId, addDays(day, 1), true).filter(r => r.day > addDays(day, -56)));
   if (!sets.length) return null;
@@ -1000,8 +1016,8 @@ function deloadDue(day) {
   const first = firstDay();
   if (deloadOn(day) || !first || daysBetween(first, day) < 28) return null;
   if (S.settings.deloadSnooze && day < S.settings.deloadSnooze) return null;
-  const weeks = hardWeeks(day);
-  if (weeks >= 5) return { weeks, signs: [] };
+  const weeks = hardWeeks(day), due = ageOn(day) >= 50 ? 4 : 5;   // recovery slows with age: a week sooner from 50
+  if (weeks >= due) return { weeks, signs: [] };
   if (weeks < 3) return null;
   const tr = recoveryTrend(day), jr = jointRatios(day), st = stalledLifts(day);
   const hot = JOINT_ORDER.filter(j => jr[j].ratio > 1.3 && jr[j].acute > JOINT_FLOOR);
@@ -2314,6 +2330,8 @@ function renderPlan() {
       <h2>Settings</h2>
       <div class="list">${(S.settings.tipsSeen || []).length ? `<div class="row"><div class="l"><b>Tips</b><div class="small muted">The short how-to notes shown the first time you use each screen.</div></div><button class="linkbtn" data-act="tipsreset">Show again</button></div>` : ""}<div class="row"><div class="l"><b>Weights in</b><div class="small muted">Only changes what you see. Your log converts either way.</div></div>
         <div class="unit-toggle" role="group" aria-label="Units">${["lb", "kg"].map(u => `<button type="button" data-act="unit" data-v="${u}" aria-pressed="${unit() === u}">${u}</button>`).join("")}</div></div>
+        <div class="row"><div class="l"><b>Birth year</b><div class="small muted">${S.settings.birthYear ? `Age ${ageOn(dayKey(new Date()))}. Adjusts strength levels outside 23–39${ageOn(dayKey(new Date())) > 40 ? ", recovery time, and from 50 how often deloads come" : ""}.` : "Optional. Adjusts strength levels and recovery for your age."}</div></div>
+          <input class="yearin" id="birthyear" inputmode="numeric" maxlength="4" placeholder="Year" value="${S.settings.birthYear || ""}" aria-label="Birth year"></div>
         <div class="row"><div class="l"><b>Strength standards</b><div class="small muted">Which standards your strength levels compare against. Off until you pick.</div></div>
         <div class="unit-toggle" role="group" aria-label="Strength standards">${[["m", "Men's"], ["f", "Women's"]].map(([k, n]) => `<button type="button" data-act="stdsex" data-v="${k}" aria-pressed="${S.settings.stdSex === k}">${n}</button>`).join("")}</div></div></div>
     </section>
@@ -2573,8 +2591,9 @@ const SOURCES = {
   levels: { t: "Strength levels", p: [
     "Each lift's level compares your best set in the last 8 weeks (as an estimated 1-rep max, or reps for bodyweight moves) with bodyweight-ratio bands for beginner, novice, intermediate, advanced and elite, scaled to your weight.",
     "The bands are Iron Ledger's own blend of widely published standards (several online calculators, the Kilgore tables on ExRx), and dumbbell or variant lifts are converted from their barbell versions. Treat a level as give or take half a step. They're for spotting balance, not a test: no study links particular ratios between lifts to injury.",
-    "A movement a full level behind your others gets flagged, so it can get more attention."],
-    refs: [["ExRx strength standards (Kilgore)", "https://exrx.net/Questions/StrengthTests"], ["van den Hoek et al. 2024, powerlifting norms from 809,986 entries (JSAMS)", "https://pubmed.ncbi.nlm.nih.gov/39060209/"], ["Strength Level, community standards", "https://strengthlevel.com/strength-standards"]] },
+    "A movement a full level behind your others gets flagged, so it can get more attention.",
+    "With a birth year set, the standards are adjusted outside ages 23–39 using powerlifting's age coefficients (McCulloch for 40 and over, Foster for juniors): at 50 a lift counts about 13% more, at 60 about 34%."],
+    refs: [["ExRx strength standards (Kilgore)", "https://exrx.net/Questions/StrengthTests"], ["van den Hoek et al. 2024, powerlifting norms from 809,986 entries (JSAMS)", "https://pubmed.ncbi.nlm.nih.gov/39060209/"], ["Strength Level, community standards", "https://strengthlevel.com/strength-standards"], ["McCulloch masters age coefficients (APF table)", "https://worldpowerliftingcongress.com/wp-content/uploads/2015/02/Glossbrenner.htm"]] },
 };
 function srcBtn(key) { return `<button class="help src" data-act="src" data-k="${key}" aria-label="Sources: ${esc(SOURCES[key].t)}">?</button>`; }
 function openSource(key) {
@@ -2859,6 +2878,15 @@ function backupDocs(j) {
   }
   return null;
 }
+// Birth year: blank clears it; anything outside a plausible range is refused
+document.addEventListener("change", async ev => {
+  if (ev.target.id !== "birthyear") return;
+  const v = ev.target.value.trim(), y = parseInt(v), now = new Date().getFullYear();
+  if (v && !(y >= now - 100 && y <= now - 12)) { toast(`Enter a year between ${now - 100} and ${now - 12}`); ev.target.value = S.settings.birthYear || ""; return; }
+  const { birthYear, ...rest } = S.settings;
+  S.settings = v ? { ...rest, birthYear: y } : rest;
+  render(); await saveDoc("settings/main", S.settings);
+});
 document.addEventListener("change", async ev => {
   if (ev.target.id !== "importfile") return;
   const f = ev.target.files?.[0]; ev.target.value = "";

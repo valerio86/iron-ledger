@@ -411,3 +411,4 @@ details.fold.info > summary { font-size: 15px; display: inline-block; padding: 2
 .lvkey i { display: inline-block; width: 12px; height: 8px; border-radius: 2px; margin-right: 4px; vertical-align: 0; }
 .srcs { padding-left: 18px; }
 .srcs a { color: var(--accent); }
+.yearin { width: 76px; text-align: center; font: 15px var(--font-data); color: var(--fg); border: 1px solid var(--line); border-radius: 8px; padding: 7px 8px; background: var(--bg); }

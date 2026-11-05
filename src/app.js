@@ -797,7 +797,6 @@ function bestSet(exId) {
 // Lifts logged per dumbbell with one in each hand: the load is shown per hand, and is double that against bodyweight
 const PER_HAND = new Set(["db_bench", "incline_db", "db_fly", "db_ohp", "db_curl", "hammer", "lateral", "rev_fly", "split_squat", "lunge"]);
 function bodyweightRatio(exId, lb, bw) { return (PER_HAND.has(exId) ? lb * 2 : lb) / bw; }
-// noDeload: leave out deload sessions, which are light on purpose (for progression and stalls)
 /* Strength levels: where a lift sits against rough population standards, for your bodyweight and the standards you chose (settings.stdSex m|f).
    Anchor lifts carry 1RM ÷ bodyweight bands (beginner … elite) for a 165 lb man / 135 lb woman, scaled to your bodyweight by bw^⅔:
    strength follows muscle cross-section, so lighter lifters lift more per pound. Variants are a fixed fraction of their anchor's load.
@@ -876,6 +875,24 @@ function strengthLevels(day) {
   // A full level behind the others is worth prioritising; a lift at your gear's limit may be stronger than it looks
   for (const g of groups) g.lag = scored.length >= 3 && g.best && !g.best.capped && g.best.score <= median - 1;
   return { groups, median };
+}
+
+// The same per muscle: each muscle takes the best level among lifts that work it as a main mover (weight ≥ .75).
+// Muscles no standard covers (calves, abs, …) come back with best: null and covered: false.
+function muscleLevels(day) {
+  const lv = {}, covered = {};
+  for (const ex of allEx()) {
+    const has = !!(STD_REPS[ex.id] || STD_ANCHOR[ex.id] || STD_VARIANT[ex.id]);
+    for (const [m, w] of Object.entries(ex.muscles)) if (w >= .75 && has) covered[m] = true;
+    if (!has) continue;
+    const l = liftLevel(ex.id, day); if (!l) continue;
+    for (const [m, w] of Object.entries(ex.muscles)) if (w >= .75 && (!lv[m] || l.score > lv[m].score)) lv[m] = l;
+  }
+  const rows = Object.keys(MUSCLES).map(m => ({ k: m, n: MUSCLES[m].n, best: lv[m] || null, covered: !!covered[m] }));
+  const scored = rows.filter(r => r.best).map(r => r.best.score).sort((a, b) => a - b);
+  const median = scored.length ? scored[Math.floor((scored.length - 1) / 2)] : null;
+  for (const r of rows) r.lag = scored.length >= 4 && r.best && !r.best.capped && r.best.score <= median - 1;
+  return { rows, median };
 }
 
 // noDeload: leave out deload sessions, which are light on purpose (for progression and stalls)
@@ -1899,6 +1916,7 @@ function renderEntry(e, i, day, fatPre, actx) {
 // Three views so the tab isn't one long scroll: lifts (strength + history), load (volume, joints), body (Garmin)
 const PROG_VIEWS = [["lifts", "Strength"], ["load", "Workload"], ["body", "Body"]];
 try { const v = localStorage.getItem("il-prog-view"); if (PROG_VIEWS.some(([k]) => k === v)) S.progView = v; } catch {}
+try { if (localStorage.getItem("il-lv-view") === "movement") S.lvView = "movement"; } catch {}
 function progSeg() { return `<div class="seg" role="group" aria-label="Progress view">${PROG_VIEWS.map(([k, n]) => `<button data-act="progview" data-v="${k}" aria-pressed="${S.progView === k}">${n}</button>`).join("")}</div>`; }
 function renderProgress() {
   const today = dayKey(new Date());
@@ -2091,26 +2109,39 @@ function renderMuscleBars(today) {
 }
 function entryVolume(e, ex) { return doneSets(e).reduce((a, s) => a + (ex.kind === "weight" ? (s.w || 0) * s.r : s.r), 0); }
 // Weekly sets per muscle over the last 8 weeks, coloured against each muscle's target range
-// Strength levels by movement: a 5-step track per group, the lift behind it, and the group that's behind
+// Strength levels as a chart: a row per muscle (or movement), five zones on the track, the bar's length is the level
+// and its colour the zone it reached. Tap a row for the lift behind it and the next step.
 function renderLevels(today) {
-  if (!S.settings.stdSex) return `<section class="block"><h2>Strength levels ${srcBtn("levels")}</h2><p class="small muted" style="margin:0">See how each movement compares with beginner-to-elite standards for your bodyweight. Pick men's or women's standards in Settings to turn this on.</p></section>`;
+  if (!S.settings.stdSex) return `<section class="block"><h2>Strength levels ${srcBtn("levels")}</h2><p class="small muted" style="margin:0">See how each muscle compares with beginner-to-elite standards for your bodyweight. Pick men's or women's standards in Settings to turn this on.</p></section>`;
   if (!latestWeight(today)) return "";
-  const { groups } = strengthLevels(today), has = groups.filter(g => g.best);
-  if (!has.length) return "";
-  const row = g => {
-    if (!g.best) return `<div class="lvrow none"><span class="lvn">${g.n}</span><span class="lvt"></span><span class="small muted">not logged</span></div>`;
-    const pct = Math.min(100, g.best.score / 5 * 100);
-    return `<div class="lvrow${g.lag ? " lag" : ""}"><span class="lvn">${g.n}</span>
-      <span class="lvt" role="img" aria-label="${g.n}: ${g.best.level}, from ${esc(exById(g.best.exId).name)}">${[1, 2, 3, 4].map(i => `<i style="left:${i * 20}%"></i>`).join("")}<b style="width:${pct}%"></b></span>
-      <span class="small"><b>${g.best.level}${g.best.capped ? "+" : ""}</b> <span class="muted">${esc(exById(g.best.exId).name)}</span></span></div>`;
+  const byMuscle = S.lvView !== "movement", ml = byMuscle ? muscleLevels(today) : null;
+  const rows = byMuscle ? ml.rows.filter(r => r.covered) : strengthLevels(today).groups;
+  if (!rows.some(r => r.best)) return "";
+  const sel = rows.find(r => r.k === S.lvSel && r.best);
+  const lvIdx = sc => sc < 1 ? 0 : Math.min(5, Math.floor(sc));
+  const row = r => {
+    if (!r.best) return `<div class="lvrow none"><span class="lvn">${r.n}</span><span class="lvt">${"<i></i>".repeat(5)}</span><span class="lvl">not logged</span></div>`;
+    const b = r.best, ex = exById(b.exId), word = b.level + (b.capped ? "+" : "");
+    return `<button class="lvrow${r.lag ? " lag" : ""}${sel === r ? " on" : ""}" data-act="lvsel" data-k="${r.k}" aria-pressed="${sel === r}" aria-label="${r.n}: ${word}${r.lag ? ", behind your others" : ""}, from ${esc(ex.name)}" title="${esc(ex.name)}: ${word}">
+      <span class="lvn">${r.lag ? "▲ " : ""}${r.n}</span>
+      <span class="lvt" aria-hidden="true">${"<i></i>".repeat(5)}<b class="l${lvIdx(b.score)}" style="width:${Math.max(3, b.score / 5 * 100).toFixed(1)}%"></b></span>
+      <span class="lvl">${word}</span></button>`;
   };
-  const lag = groups.filter(g => g.lag);
+  const lags = rows.filter(r => r.lag);
+  let detail = lags.length ? `<b>${lags.map(r => r.n).join(", ")}</b> ${lags.length > 1 ? "are" : "is"} a level or more behind the rest (▲). Worth giving ${lags.length > 1 ? "them" : "it"} priority.` : "Tap a row for the lift behind it.";
+  if (sel) {
+    const b = sel.best, ex = exById(sel.best.exId), each = PER_HAND.has(ex.id) ? " each" : "";
+    detail = `<b>${sel.n}</b>: ${b.level.toLowerCase()}${b.capped ? " or better (your gear's limit)" : ""}, from ${esc(ex.name.toLowerCase())} (${b.kind === "reps" ? `${Math.round(b.v)} reps` : `est. max ${fmtW(b.v)}${each}`}).${b.next ? ` ${LEVELS[Math.floor(b.score)]} starts at ${b.kind === "reps" ? `${Math.ceil(b.next)} reps` : `${fmtW(b.next)}${each}`}.` : ""}`;
+  }
+  const none = byMuscle ? ml.rows.filter(r => !r.covered).map(r => r.n.toLowerCase()) : [];
   return `<section class="block">
     <h2>Strength levels ${srcBtn("levels")}</h2>
-    <div class="lvscale small muted"><span></span><span>Beg.</span><span>Nov.</span><span>Int.</span><span>Adv.</span><span>Elite</span></div>
-    <div class="lvs">${groups.map(row).join("")}</div>
-    ${lag.length ? `<div class="hint warn small">${lag.map(g => `<b>${g.n}</b>`).join(" and ")} ${lag.length > 1 ? "are" : "is"} a level or more behind your other movements. Worth giving ${lag.length > 1 ? "them" : "it"} priority.</div>` : ""}
-    <p class="small muted" style="margin:0">Rough levels from your best set in the last 8 weeks. "+" means you're at your gear's limit, so you may be stronger than this.</p>
+    <div class="seg lvseg" role="group" aria-label="Group by">${[["muscle", "By muscle"], ["movement", "By movement"]].map(([k, n]) => `<button data-act="lvview" data-v="${k}" aria-pressed="${(byMuscle ? "muscle" : "movement") === k}">${n}</button>`).join("")}</div>
+    <div class="lvkey" aria-hidden="true">${LEVELS.map((n, i) => `<span><i style="background:var(--lv${i + 1})"></i>${n}</span>`).join("")}</div>
+    <div class="lvs">${rows.map(row).join("")}</div>
+    <div class="lvticks" aria-hidden="true">${LEVELS.map((n, i) => `<span style="left:${(i + 1) * 20}%">${i < 4 ? n.slice(0, 3) + "." : n}</span>`).join("")}</div>
+    <div class="small" aria-live="polite" style="margin-top:8px">${detail}</div>
+    <p class="small muted" style="margin:6px 0 0">Rough levels from your best set in the last 8 weeks. "+" means you're at your gear's limit, so you may be stronger than this.${none.length ? ` No standards for ${none.join(", ")}.` : ""}</p>
   </section>`;
 }
 function renderMuscleWeeks(today) {
@@ -2631,6 +2662,8 @@ document.addEventListener("click", async ev => {
     case "bpclear": S.libSel = null; render(); break;
     case "planview": S.planView = b.dataset.v; try { localStorage.setItem("il-plan-view", S.planView); } catch {} render(); break;
     case "wkmode": S.settings = { ...S.settings, week: { ...WEEK_DEFAULT, ...(S.settings.week || {}), mode: b.dataset.v } }; render(); await saveDoc("settings/main", S.settings); break;
+    case "lvview": S.lvView = b.dataset.v; S.lvSel = null; try { localStorage.setItem("il-lv-view", S.lvView); } catch {} render(); break;
+    case "lvsel": S.lvSel = S.lvSel === b.dataset.k ? null : b.dataset.k; render(); break;
     case "stdsex": S.settings = { ...S.settings, stdSex: S.settings.stdSex === b.dataset.v ? null : b.dataset.v }; render(); await saveDoc("settings/main", S.settings); break;
     case "unit": if (S.settings.unit !== b.dataset.v) { S.settings = { ...S.settings, unit: b.dataset.v }; render(); await saveDoc("settings/main", S.settings); } break;
     case "progview": S.progView = b.dataset.v; try { localStorage.setItem("il-prog-view", S.progView); } catch {} render(); break;

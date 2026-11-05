@@ -194,6 +194,32 @@ function run() {
     try { const h = renderProgress(); ok(h.includes("↑ 20%"), "trend"); ok(h.includes("in 4 wk"), "window"); ok(h.indexOf("hero") < h.indexOf("chart1"), "order"); } finally { [S.progEx, S.progView] = saved; }
   }));
 
+  // Deload. Six weeks of the same three lifts a week, ending yesterday (the gear lets the weight go up)
+  const steadyWeeks = (weeks, w = 50) => { let out = {}; for (let i = weeks * 7; i >= 1; i -= 2) out = { ...out, ...session(ago(i), entry("deadlift", w, 5)) }; return out; };
+  const R1 = { r: { id: "r", name: "R", items: [{ ex: "deadlift", sets: 4, r: 5, rHi: 8, w: 50 }, { ex: "db_curl", sets: 3, r: 8, rHi: 12, w: 20 }] } };
+  test("deload: due after 5 straight full weeks, not before", () => {
+    scene({ sessions: steadyWeeks(6), settings: bigGear }, () => { ok(hardWeeks(today) >= 5, "weeks"); ok(deloadDue(today), "due"); ok(coach(today).msgs.some(m => m.t.includes("deload-start")), "button"); });
+    scene({ sessions: steadyWeeks(3), settings: bigGear }, () => eq(deloadDue(today), null));
+  });
+  test("deload: a recent deload or a snooze resets the reminder", () => {
+    scene({ sessions: steadyWeeks(6), settings: { ...bigGear, deloads: [{ start: ago(10), end: ago(4) }] } }, () => { ok(hardWeeks(today) < 2); eq(deloadDue(today), null); });
+    scene({ sessions: steadyWeeks(6), settings: { ...bigGear, deloadSnooze: addDays(today, 2) } }, () => eq(deloadDue(today), null));
+  });
+  test("deload: half the sets, no top-ups, and Start lightens the weight", () => scene({ sessions: steadyWeeks(3), routines: R1, settings: { ...bigGear, deloads: [{ start: today, end: addDays(today, 6) }] } }, () => {
+    const a = adaptRoutine(S.routines.r, today);
+    ok(a.deload); eq(a.items.map(x => x.sets), [2, 2]);
+    eq(deloadWeight(50, 5), 45); eq(deloadWeight(20, 5), 20, "too coarse a step holds the weight"); eq(deloadWeight(100, 5), 90);
+    const p = planDay(today); ok(p.kind !== "lift" || (p.deload && /Deload/.test(p.note) && !p.addon), "plan says so");
+  }));
+  test("deload: progression and stalls skip deload sessions", () => scene({
+    sessions: { ...session(ago(9), { ...entry("deadlift", 60, 8), rLo: 5, rHi: 8 }), [ago(2)]: { date: ago(2), deload: true, entries: [entry("deadlift", 55, 5, "easy", 2)] } }, settings: bigGear }, () => {
+    const p = progression("deadlift", today); eq(p.last.day, ago(9)); ok(p.bump > 0, "carries on from the full session");
+  }));
+  test("deload: no PR or volume nudges during the week", () => scene({
+    sessions: steadyWeeks(3), health: { [today]: { readiness: 85 } }, settings: { ...bigGear, deloads: [{ start: ago(1), end: addDays(today, 5) }] } }, () => {
+    const m = coach(today).msgs; ok(m.some(x => x.t.includes("Deload week</b>, day 2 of 7")), "banner"); ok(!m.some(x => /push for a PR|Light this week/.test(x.t)), "nudges");
+  }));
+
   const failed = results.filter(r => !r.ok);
   document.title = failed.length ? `${failed.length} FAILED` : "all passed";
   document.getElementById("view").innerHTML = `<pre>${esc(results.map(r => `${r.ok ? "ok  " : "FAIL"} ${r.name}${r.msg ? `\n     ${r.msg}` : ""}`).join("\n"))}\n\n${results.length - failed.length} of ${results.length} passed</pre>`;

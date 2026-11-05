@@ -797,10 +797,12 @@ function bestSet(exId) {
 // Lifts logged per dumbbell with one in each hand: the load is shown per hand, and is double that against bodyweight
 const PER_HAND = new Set(["db_bench", "incline_db", "db_fly", "db_ohp", "db_curl", "hammer", "lateral", "rev_fly", "split_squat", "lunge"]);
 function bodyweightRatio(exId, lb, bw) { return (PER_HAND.has(exId) ? lb * 2 : lb) / bw; }
-function historyFor(exId, beforeDay) {
+// noDeload: leave out deload sessions, which are light on purpose (for progression and stalls)
+function historyFor(exId, beforeDay, noDeload) {
   const rows = [];
   for (const [day, s] of Object.entries(S.sessions)) {
     if (beforeDay && day >= beforeDay) continue;
+    if (noDeload && s.deload) continue;
     for (const e of s.entries || []) if (e.ex === exId && doneSets(e).length) rows.push({ day, e, score: entryScore(e, exById(exId)) });
   }
   return rows.sort((a, b) => a.day < b.day ? -1 : 1);
@@ -809,7 +811,8 @@ function firstDay() { const ks = Object.keys(S.sessions).filter(k => S.sessions[
 
 /* Progression: what to load next time */
 function progression(exId, beforeDay) {
-  const h = historyFor(exId, beforeDay);
+  let h = historyFor(exId, beforeDay, true);   // after a deload, pick up from the last full session
+  if (!h.length) h = historyFor(exId, beforeDay);
   if (!h.length) return null;
   const last = h[h.length - 1];
   const ex = exById(exId);
@@ -862,6 +865,53 @@ function trimReason(day) {
 }
 // First ~2 weeks: run the starter routines as written, without top-up exercises or cardio add-ons
 function isNewcomer(day) { return Object.keys(S.sessions).filter(k => k < day && liftedOn(k)).length < 6; }
+
+/* Deload: a planned lighter week. About half the sets at ~90% of the weight, stopping 3–4 reps short, then back to normal.
+   Due after 5 straight full weeks, or after 3 when two warning signs pile up (stalled lifts, recovery trending down, joints running hot).
+   settings.deloads = [{start, end}], settings.deloadSnooze = day the reminder comes back */
+const DELOAD_DAYS = 7, DELOAD_W = .9;
+function deloadOn(day) { return (S.settings.deloads || []).find(d => d.start <= day && day <= d.end) || null; }
+// Straight weeks of full training, counting back from this day. A week well under the usual volume, or a deload, ends the run.
+function hardWeeks(day) {
+  let n = 0;
+  for (let i = 0; i < 10; i++) {
+    const end = addDays(day, -7 * i), from = addDays(end, -6), v = totalSets(from, end);
+    const base = totalSets(addDays(end, -34), addDays(end, -7)) / 4;
+    if ((base > 0 && v < base * .6) || (S.settings.deloads || []).some(d => d.start <= end && d.end >= from)) break;
+    if (v > 0) n++;
+  }
+  return n;
+}
+// Lifts with no progress in 3 weeks (best estimate, heaviest weight and reps at it all flat). Deload sessions don't count.
+function stalledLifts(day) {
+  const out = [];
+  for (const ex of allEx()) {
+    const h = historyFor(ex.id, undefined, true).filter(r => r.day > addDays(day, -42) && r.day <= day);
+    if (h.length < 4 || atCap(ex.id)) continue;   // capped lifts progress by reps; not a stall
+    const recent = Math.max(0, ...h.filter(r => r.day > addDays(day, -21)).map(r => r.score));
+    const prior = Math.max(0, ...h.filter(r => r.day <= addDays(day, -21)).map(r => r.score));
+    // A heavier weight, or more reps at your heaviest, is progress even when the estimate says otherwise
+    const heaviest = rows => doneSetsOf(rows).reduce((a, s) => (s.w || 0) > a.w || ((s.w || 0) === a.w && s.r > a.r) ? { w: s.w || 0, r: s.r } : a, { w: 0, r: 0 });
+    const hr = heaviest(h.filter(r => r.day > addDays(day, -21))), hp = heaviest(h.filter(r => r.day <= addDays(day, -21)));
+    if (hr.w > hp.w || (hr.w === hp.w && hr.r > hp.r)) continue;
+    if (prior && recent && recent <= prior * 1.005) out.push(ex);
+  }
+  return out;
+}
+function deloadDue(day) {
+  const first = firstDay();
+  if (deloadOn(day) || !first || daysBetween(first, day) < 28) return null;
+  if (S.settings.deloadSnooze && day < S.settings.deloadSnooze) return null;
+  const weeks = hardWeeks(day);
+  if (weeks >= 5) return { weeks, signs: [] };
+  if (weeks < 3) return null;
+  const tr = recoveryTrend(day), jr = jointRatios(day), st = stalledLifts(day);
+  const hot = JOINT_ORDER.filter(j => jr[j].ratio > 1.3 && jr[j].acute > JOINT_FLOOR);
+  const signs = [st.length >= 2 && `${st.length} lifts stalled`, (tr.hrvDown || tr.rhrUp) && "recovery trending down", hot.length && `${hot.map(j => JOINT_NAMES[j]).join(", ")} load running high`].filter(Boolean);
+  return signs.length >= 2 ? { weeks, signs, early: true } : null;
+}
+// Deload weight: ~90%, rounded to the lift's step. When the step is too coarse for that, hold the weight (fewer sets and reps in reserve still make it light)
+function deloadWeight(w, inc) { const x = Math.round(w * DELOAD_W / (inc || 5)) * (inc || 5); return x > 0 && x < w ? x : w; }
 function liftedOn(day) { return !!S.sessions[day]?.entries?.some(e => doneSets(e).length); }
 function cardioOn(fromDay, toDay) { return S.cardio.filter(a => a.day >= fromDay && a.day <= toDay && !CARDIO_SPORTS_EXCL.has(a.sport) && a.mins >= 15).sort((a, b) => a.t - b.t); }
 function routineOf(day) {
@@ -963,7 +1013,10 @@ function planDay(day) {
 
   const poor = h.readiness != null ? h.readiness < 25 : /POOR/i.test(h.hrvStatus || "");
   const low = h.readiness != null && h.readiness < 50;
+  const dl = deloadOn(day);
+  if (dl) why.push(`deload week, day ${daysBetween(dl.start, day) + 1} of ${daysBetween(dl.start, dl.end) + 1}`);
   const cardioPick = () => {
+    if (dl) return { kind: "cardio", mins: Math.min(30, perSess), title: `Easy Zone 2: ${cardioWords()}`, note: `${Math.min(30, perSess)} min${z2Text()}. Deload week: keep it easy, and no long session.` };
     if (tr.hrvDown || tr.rhrUp) return { kind: "cardio", mins: 25, title: "Short easy cardio, or rest", note: `20–30 min, conversational${z2Text()}. Recovery is dipping, and cardio is the first thing to cut, before lifting.` };
     if (!cardio.some(a => a.mins >= longMin)) {
       if (building) return { kind: "cardio", mins: longMin, title: `Long Zone 2: ${cardioWords()}`, note: `${longMin} min${longest ? `, about 10 more than your longest in recent weeks (${longest})` : ""}. Easy enough to hold a conversation${z2Text()}. Stop early if you need to; it builds up to 45–60 week by week.` };
@@ -1008,13 +1061,14 @@ function planDay(day) {
       why.push(`every routine leans on what you noted (${jointIssues.map(i => JOINT_NAMES[i.k.slice(6)]).join(", ")}), so lifting can wait a day`);
     } else {
       const pick = order.find(r => ok(r) && !tiredIn(r).length) || order.find(ok) || order.find(r => !tiredIn(r).length) || order[0];
-      p = { kind: "lift", routine: pick, title: pick.name, note: low ? "Readiness is low: Start drops a set from each exercise and holds your weights. Skip grinders."
+      p = { kind: "lift", routine: pick, title: pick.name, deload: dl, note: dl ? "Deload week: half the sets at about 90% of your weight. Stop every set with 3–4 reps left."
+        : low ? "Readiness is low: Start drops a set from each exercise and holds your weights. Skip grinders."
         : tiredNote ? "You noted feeling tired: Start drops a set from each exercise. Keep it moderate, no grinders."
         : tr.hrvDown || tr.rhrUp ? "Lift as planned, but hold your weights. No PR attempts while HRV is below your usual."
         : h.readiness >= 75 ? "You're well recovered. Good day to push the top of your rep ranges." : "" };
-      p.trim = trimReason(day);
+      p.trim = dl ? null : trimReason(day);
       // Well behind on cardio minutes and recovering fine → stack a short easy session after lifting
-      if (minsDone < minsT * .6 && !isNewcomer(day) && !tr.hrvDown && !tr.rhrUp && !low && !tiredNote) {
+      if (minsDone < minsT * .6 && !dl && !isNewcomer(day) && !tr.hrvDown && !tr.rhrUp && !low && !tiredNote) {
         const m = Math.min(25, Math.max(15, Math.round((minsT - minsDone) / 3 / 5) * 5));
         p.addon = { mins: m, text: `${m} min easy ${lowImpactWords()} after lifting${z2Text()}. You're at ${minsDone} of ${minsT} cardio minutes this week.` };
       }
@@ -1058,6 +1112,13 @@ function adaptRoutine(r, day) {
     const sameKind = E.kind === exById(it.ex).kind;
     items.push({ ex, sets, r: sameKind ? it.r : E.kind === "time" ? 30 : 8, rHi: sameKind ? it.rHi : E.kind === "time" ? 45 : 12, w: ex === it.ex ? it.w : 0 });
     count(ex, sets);
+  }
+  // Deload week: half the sets (rounded up), at ~90% of the weight (set at Start)
+  if (deloadOn(day)) {
+    const before = items.reduce((a, x) => a + x.sets, 0);
+    for (const x of items) x.sets = Math.ceil(x.sets / 2);
+    changes.push(`Deload week: <b>${before} → ${items.reduce((a, x) => a + x.sets, 0)} sets</b>, weights about 90%, 3–4 reps left in each set`);
+    return { items, changes, deload: true };
   }
   // 3. Top up to two fresh muscles your routines under-cover across a week, minus extra work already done this week
   //    (structural gaps, so a lower day doesn't fill in for the upper day that's coming anyway). Not on a lighter day.
@@ -1153,17 +1214,12 @@ function coach(day) {
   if (sess?.entries?.length && liftedOn(addDays(day, -1)))
     msgs.push({ lvl: "warn", t: `You lifted yesterday too. Your plan keeps lifting days apart so each one can recover. If you go ahead, keep it light.` });
 
-  // Deload: a lighter week every 5–6 weeks (plan rule)
-  if (histDays >= 28) {
-    let hardWeeks = 0;
-    for (let i = 0; i < 10; i++) {
-      const end = addDays(day, -7 * i), v = totalSets(addDays(end, -6), end);
-      const base = totalSets(addDays(end, -34), addDays(end, -7)) / 4;
-      if (base > 0 && v < base * .6) break;   // found a lighter week
-      if (v > 0) hardWeeks++;
-    }
-    if (hardWeeks >= 5) msgs.push({ lvl: "warn", t: `<b>${hardWeeks} straight weeks</b> without a lighter one. Your plan calls for a deload every 5–6 weeks: same lifts, about half the sets, lighter weight. Don't skip it.` });
-  }
+  // Deload: a lighter week every 5–6 weeks (plan rule), or sooner when warning signs pile up
+  const dl = deloadOn(day), due = isToday && deloadDue(day);
+  if (dl) msgs.push({ lvl: "info", ic: "↓", t: `<b>Deload week</b>, day ${daysBetween(dl.start, day) + 1} of ${daysBetween(dl.start, dl.end) + 1} (back to normal ${fmtDay(addDays(dl.end, 1), { weekday: "long" })}). Same lifts, half the sets, about 90% weight. You won't lose strength in a week; this is when the last few weeks' work settles in.
+    ${isToday ? `<div class="swaps"><button class="chipbtn" data-act="deload-end">End it early</button></div>` : ""}` });
+  else if (due) msgs.push({ lvl: "warn", ic: "↓", t: `<b>Time for a deload week.</b> ${due.early ? `${due.weeks} weeks of full training, and ${due.signs.join(" and ")}.` : `${due.weeks} straight weeks of full training.`} For the next 7 days: the same lifts with half the sets at about 90% weight, easy cardio only. You'll come back stronger.
+    <div class="swaps"><button class="chipbtn primary" data-act="deload-start">Start deload week</button><button class="chipbtn" data-act="deload-snooze">Not yet</button></div>` });
 
   // Recovery trending the wrong way → cut cardio first, not lifting (plan rule)
   const hk = Object.keys(S.health).filter(k => k <= day).sort();
@@ -1202,7 +1258,7 @@ function coach(day) {
     if (h.readiness != null) {
       if (h.readiness < 25) msgs.push({ lvl: "bad", t: `Garmin readiness is <b>${h.readiness}</b> (poor)${h.sleepScore ? `, sleep ${h.sleepScore}` : ""}. Make today light: technique work, mobility, or rest.` });
       else if (h.readiness < 50) msgs.push({ lvl: "warn", t: `Garmin readiness is <b>${h.readiness}</b> (low). Train, but skip grinders and drop a set from each lift.` });
-      else if (h.readiness >= 75) msgs.push({ lvl: "good", t: `Garmin readiness is <b>${h.readiness}</b>. Good day to push for a PR.` });
+      else if (h.readiness >= 75 && !dl) msgs.push({ lvl: "good", t: `Garmin readiness is <b>${h.readiness}</b>. Good day to push for a PR.` });
     } else {
       if (h.sleepScore != null && h.sleepScore < 60) msgs.push({ lvl: "warn", t: `Sleep score <b>${h.sleepScore}</b>. Keep the effort moderate today.` });
       if (/LOW|UNBALANCED|POOR/i.test(h.hrvStatus || "")) msgs.push({ lvl: "warn", t: `Overnight HRV is <b>${h.hrv ?? "?"} ms</b> (${String(h.hrvStatus).toLowerCase()}). Your body's still under strain. Go lighter.` });
@@ -1237,7 +1293,7 @@ function coach(day) {
   if (histDays >= 13) {
     const majors = ["chest", "lats", "upperBack", "quads", "hamstrings", "glutes"];
     const under = majors.filter(m => wk[m] < MUSCLES[m].lo / 2);
-    if (under.length) msgs.push({ lvl: "info", t: `Light this week: ${under.map(m => `<b>${MUSCLES[m].n}</b> ${wk[m].toFixed(0)}/${MUSCLES[m].lo}`).join(", ")} sets.` });
+    if (under.length && !dl) msgs.push({ lvl: "info", t: `Light this week: ${under.map(m => `<b>${MUSCLES[m].n}</b> ${wk[m].toFixed(0)}/${MUSCLES[m].lo}`).join(", ")} sets.` });
   }
 
   // 4. Push/pull balance over 14 days
@@ -1266,17 +1322,7 @@ function coach(day) {
   if (trained >= 6) msgs.push({ lvl: "warn", t: `${trained} training days out of the last 7. Plan a full rest day.` });
 
   // 8. Stalls
-  for (const ex of allEx()) {
-    const h = historyFor(ex.id).filter(r => r.day > addDays(day, -42) && r.day <= day);
-    if (h.length < 4 || atCap(ex.id)) continue;   // capped lifts progress by reps; not a stall
-    const recent = Math.max(0, ...h.filter(r => r.day > addDays(day, -21)).map(r => r.score));
-    const prior = Math.max(0, ...h.filter(r => r.day <= addDays(day, -21)).map(r => r.score));
-    // A heavier weight, or more reps at your heaviest, is progress even when the estimate says otherwise
-    const heaviest = rows => doneSetsOf(rows).reduce((a, s) => (s.w || 0) > a.w || ((s.w || 0) === a.w && s.r > a.r) ? { w: s.w || 0, r: s.r } : a, { w: 0, r: 0 });
-    const hr = heaviest(h.filter(r => r.day > addDays(day, -21))), hp = heaviest(h.filter(r => r.day <= addDays(day, -21)));
-    if (hr.w > hp.w || (hr.w === hp.w && hr.r > hp.r)) continue;
-    if (prior && recent && recent <= prior * 1.005) msgs.push({ lvl: "info", t: `<b>${esc(ex.name)}</b> hasn't moved in 3 weeks. Try a lighter week, or change the rep range.` });
-  }
+  if (!dl) for (const ex of stalledLifts(day)) msgs.push({ lvl: "info", t: `<b>${esc(ex.name)}</b> hasn't moved in 3 weeks. Try a lighter week, or change the rep range.` });
 
   // 9. PRs today
   for (const e of sess?.entries || []) {
@@ -1289,7 +1335,7 @@ function coach(day) {
 
   deferred.forEach(f => f());
   // Suggestions: fresh muscles with the biggest weekly gap
-  const gaps = Object.keys(MUSCLES).filter(m => MUSCLES[m].lo > 0 && readiness(fatNow[m]) === "fresh")
+  const gaps = dl ? [] : Object.keys(MUSCLES).filter(m => MUSCLES[m].lo > 0 && readiness(fatNow[m]) === "fresh")
     .map(m => ({ m, gap: MUSCLES[m].lo - wk[m] })).filter(x => x.gap > 0).sort((a, b) => b.gap - a.gap).slice(0, 4);
   const routineScores = Object.values(S.routines).map(r => {
     let score = 0;
@@ -1535,7 +1581,7 @@ function renderToday() {
     <div class="coach" aria-label="Coach">
       ${vitHtml}
       <div class="today-plan">
-        ${p.kind === "done" ? `<div class="label">✓ Done</div>` : `<div class="label">${day === today ? "Suggested today" : "Suggested for this day"} <span class="pill ${KIND[p.kind][1]}">${KIND[p.kind][0]}</span></div>`}
+        ${p.kind === "done" ? `<div class="label">✓ Done</div>` : `<div class="label">${day === today ? "Suggested today" : "Suggested for this day"} <span class="pill ${KIND[p.kind][1]}">${KIND[p.kind][0]}</span>${deloadOn(day) ? ` <span class="pill neutral">Deload</span>` : ""}</div>`}
         <div class="pt">${esc(p.cardio ? p.cardio.name : p.title)}</div>
         ${p.cardio ? `<div class="small num">${p.cardio.mins}′${p.cardio.re ? ` · effort ${p.cardio.re}` : ""}${p.cardio.z2 ? ` · Zone 2 ${p.cardio.z2}′` : ""}</div>` : p.note ? `<div class="small">${esc(p.note)}</div>` : ""}
         ${p.addon ? `<div class="small"><b>+ Cardio:</b> ${esc(p.addon.text)}</div>` : ""}
@@ -2355,16 +2401,32 @@ document.addEventListener("click", async ev => {
     case "add": if (S.addFor === "routine") { const ex = exById(b.dataset.id); S.addFor = null; S.rEdit.items.push({ ex: ex.id, sets: 3, r: ex.kind === "time" ? 30 : 8, ...(ex.kind === "time" ? {} : { rHi: 12 }), w: 0 }); openRoutineEditor(); break; }
       closeSheet(); mutate(s => { s.entries.push(newEntry(b.dataset.id, S.day)); s.finished = false; }); toast(`Added ${exById(b.dataset.id).name}`); break;
     case "routine": {
-      const r = S.routines[b.dataset.id], trim = trimReason(S.day), plan = b.dataset.raw ? { items: r.items, changes: [] } : adaptRoutine(r, S.day); closeSheet();
-      mutate(s => { if (trim) s.trim = trim; for (const it of plan.items) { const e = newEntry(it.ex, S.day); const p = progression(it.ex, S.day);
-        const w = p?.last ? Math.max(...p.last.e.sets.map(x => x.w || 0)) : (it.w || 0);
-        // carry last session's reps forward inside the range; start new lifts at the bottom
+      const r = S.routines[b.dataset.id], plan = b.dataset.raw ? { items: r.items, changes: [] } : adaptRoutine(r, S.day), dl = plan.deload;
+      const trim = dl ? null : trimReason(S.day); closeSheet();
+      mutate(s => { if (trim) s.trim = trim; if (dl) { s.deload = true; s.trim = "deload week"; } for (const it of plan.items) { const e = newEntry(it.ex, S.day); const p = progression(it.ex, S.day);
+        const top = p?.last ? Math.max(...p.last.e.sets.map(x => x.w || 0)) : (it.w || 0);
+        const w = dl && exById(it.ex).kind === "weight" ? deloadWeight(top, exById(it.ex).inc) : top;
+        // carry last session's reps forward inside the range; start new lifts at the bottom (and always in a deload)
         const lastR = p?.last ? Math.max(...p.last.e.sets.map(x => x.r || 0)) : it.r;
-        const r = p?.capped ? p.nextR : p?.resetReps ? it.r : Math.min(it.rHi || lastR, Math.max(it.r, lastR));
+        const r = dl ? it.r : p?.capped ? p.nextR : p?.resetReps ? it.r : Math.min(it.rHi || lastR, Math.max(it.r, lastR));
         e.sets = Array.from({ length: trim ? Math.max(1, it.sets - 1) : it.sets }, () => ({ w, r, done: false }));
         if (it.rHi) { e.rLo = it.r; e.rHi = it.rHi; }
         s.entries.push(e); } s.routine = r.id; s.finished = false; });
-      toast(`Started ${r.name}${plan.changes.length ? ` with ${plan.changes.length} change${plan.changes.length > 1 ? "s" : ""} for today` : ""}${trim ? `, one set lighter (${trim})` : ""}`); break;
+      toast(`Started ${r.name}${dl ? " as a deload" : plan.changes.length ? ` with ${plan.changes.length} change${plan.changes.length > 1 ? "s" : ""} for today` : ""}${trim ? `, one set lighter (${trim})` : ""}`); break;
+    }
+    case "deload-start": {
+      const start = S.day, end = addDays(start, DELOAD_DAYS - 1), { deloadSnooze, ...rest } = S.settings;
+      S.settings = { ...rest, deloads: [...(S.settings.deloads || []), { start, end }] };
+      render(); await saveDoc("settings/main", S.settings);
+      toast(`Deload week until ${fmtDay(end, { weekday: "long" })}`); break;
+    }
+    case "deload-snooze": S.settings = { ...S.settings, deloadSnooze: addDays(S.day, 4) }; render(); await saveDoc("settings/main", S.settings); toast("I'll ask again in a few days"); break;
+    case "deload-end": {
+      // Today goes back to normal: the deload ends yesterday, or disappears if it only started today
+      const ds = [...(S.settings.deloads || [])], k = ds.findIndex(d => d.start <= S.day && S.day <= d.end);
+      if (k < 0) break;
+      if (ds[k].start >= S.day) ds.splice(k, 1); else ds[k] = { ...ds[k], end: addDays(S.day, -1) };
+      S.settings = { ...S.settings, deloads: ds }; render(); await saveDoc("settings/main", S.settings); toast("Back to normal training"); break;
     }
     case "rm": mutate(s => s.entries.splice(i, 1)); break;
     case "done": mutate(() => { const st = E().sets[j]; st.done = !st.done; st.t = st.done ? (S.day === dayKey(new Date()) ? Date.now() : parseDay(S.day).getTime()) : null; }); break;

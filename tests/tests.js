@@ -255,6 +255,30 @@ function run() {
   }));
   test("sources: every source opens with links", () => { for (const k of Object.keys(SOURCES)) { openSource(k); ok($("#help .srcs a"), k); } closeHelp(); });
 
+  // Balanced sessions
+  const dbGear = { unit: "lb", week: { lifts: 3, cardio: 0, cardioMin: 0, mode: "auto" }, equip: { have: ["dumbbells", "pullupBar", "bench"], max: { dumbbells: 100 } } };
+  test("balanced: one lower, push and pull movement, from gear you have", () => scene({ settings: dbGear }, () => {
+    const b = buildSession(today), ids = b.items.map(x => x.ex);
+    ok(b.auto); ok(ids.length >= 3, ids.join());
+    ok(["squat", "hinge"].includes(exById(ids[0]).pattern), "lower first"); eq(exById(ids[1]).pattern, "push"); eq(exById(ids[2]).pattern, "pull");
+    ok(ids.every(canDo), "gear"); ok(!ids.includes("bench") && !ids.includes("squat"), "no rack lifts");
+  }));
+  test("balanced: alternates movements from one session to the next", () => {
+    const first = scene({ settings: dbGear }, () => buildSession(today).items.slice(0, 3).map(x => x.ex));
+    const sessions = session(ago(2), ...first.map(id => entry(id, 30, 8)));
+    const next = scene({ sessions, settings: dbGear }, () => buildSession(today).items.slice(0, 3).map(x => x.ex));
+    first.forEach((id, i) => ok(id !== next[i], `slot ${i}: ${id} twice`));
+  });
+  test("balanced: no curls when rows and pull-ups already cover biceps", () => {
+    const sessions = { ...session(ago(2), entry("db_row", 40, 8, "solid", 4), entry("chinup", 0, 8, "solid", 4)), ...session(ago(4), entry("db_row", 40, 8, "solid", 4)) };
+    scene({ sessions, settings: dbGear }, () => ok(!buildSession(today).items.some(x => ["db_curl", "hammer", "bb_curl"].includes(x.ex)), "curls added"));
+  });
+  test("balanced: the planner uses it, and Start's adapt adds no routine top-ups", () => scene({ settings: dbGear }, () => {
+    const p = planDay(today); eq(p.kind, "lift"); ok(p.routine.auto, "built"); ok(p.title.startsWith("Full body"), p.title);
+    const a = adaptRoutine(p.routine, today); ok(!a.changes.some(c => c.startsWith("+ ")), "no top-ups");
+    ok(forecast(today, 4).length === 4);
+  }));
+
   const failed = results.filter(r => !r.ok);
   document.title = failed.length ? `${failed.length} FAILED` : "all passed";
   document.getElementById("view").innerHTML = `<pre>${esc(results.map(r => `${r.ok ? "ok  " : "FAIL"} ${r.name}${r.msg ? `\n     ${r.msg}` : ""}`).join("\n"))}\n\n${results.length - failed.length} of ${results.length} passed</pre>`;

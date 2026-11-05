@@ -2328,7 +2328,7 @@ function renderPlan() {
       ${S.weekEdit ? `
       <p class="small muted" style="margin:0">No fixed days. Each morning the coach picks lift, cardio or rest from the last 7 days and how recovered you are. Lifting days are never back to back.</p>
       <div class="list">
-        <div class="row"><div class="l"><b>Lifting sessions come from</b><div class="small muted">${autoMode() ? "Built each day for balance: a lower, push and pull movement (alternating), plus what's short this week." : "Your routines, in rotation."}</div></div>
+        <div class="row"><div class="l"><b>Lifting sessions come from ${srcBtn("reps")}</b><div class="small muted">${autoMode() ? "Built each day for balance: a lower, push and pull movement (alternating), plus what's short this week." : "Your routines, in rotation."}</div></div>
           <div class="unit-toggle" role="group" aria-label="Lifting sessions come from">${[["auto", "Balanced"], ["routines", "Routines"]].map(([k, n]) => `<button type="button" data-act="wkmode" data-v="${k}" aria-pressed="${(autoMode() ? "auto" : "routines") === k}">${n}</button>`).join("")}</div></div>
         <div class="row"><div class="l"><b>Lifting sessions</b><div class="small muted">${liftsN} in the last 7 days</div></div>${stepper("lifts", wk.lifts, 2, 5)}</div>
         <div class="row"><div class="l"><b>Easy cardio sessions</b><div class="small muted">${cardioN} in the last 7 days (15+ min, walks excluded)</div></div>${stepper("cardio", wk.cardio, 0, 6)}</div>

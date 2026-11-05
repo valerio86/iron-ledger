@@ -15,7 +15,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
 server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(Handler, directory=ROOT))
 threading.Thread(target=server.serve_forever, daemon=True).start()
-with tempfile.TemporaryDirectory() as profile:
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as profile:   # Chrome can still be writing its profile as it exits
     chrome = subprocess.Popen([CHROME, "--headless=new", "--disable-gpu", f"--user-data-dir={profile}", "--no-first-run",
                                f"http://127.0.0.1:{server.server_port}/tests/index.html"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     finished = done.wait(TIMEOUT)

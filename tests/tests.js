@@ -164,6 +164,28 @@ function run() {
     try { const h = renderToday(); if (h.includes("Lunch Run")) { eq((h.match(/51′/g) || []).length <= 2, true, "minutes repeated"); ok(!h.includes("Cardio done:"), "old title"); } } finally { S.day = saved; }
   }));
 
+  const walk = (day, z2, id = "w" + day) => ({ id, name: "Morning Walk", sport: "Walk", day, t: 1, mins: 52, re: 23, z2, muscles: {} });
+  const cardioWeek = { unit: "lb", week: { lifts: 0, cardio: 3, cardioMin: 90 } };
+  test("walks: 15+ Zone 2 minutes make a session, counted by those minutes", () => scene({ cardio: [walk(ago(1), 31), walk(ago(2), 10), walk(ago(3), 0)] }, () => {
+    eq(cardioOn(ago(6), today).length, 1); eq(cardioMinutes(ago(6), today), 41);
+  }));
+  test("walks: the long build uses Zone 2 minutes, not the whole walk", () => scene({ settings: cardioWeek, cardio: [walk(ago(10), 31)] }, () => {
+    eq(planDay(today).mins, 40);
+  }));
+  test("today: a walk that covers the planned minutes marks cardio done", () => scene({ settings: cardioWeek, cardio: [walk(today, 31)] }, () => {
+    const p = planDay(today); eq(p.kind, "done"); eq(p.cardio.id, "w" + today);
+    const saved = S.day; S.day = today; try { ok(renderToday().includes("counts as a Zone 2 session")); } finally { S.day = saved; }
+  }));
+  test("today: fewer minutes than planned is partly done", () => scene({ settings: cardioWeek, cardio: [walk(today, 18)] }, () => {
+    const p = planDay(today); eq(p.kind, "cardio"); eq(p.partial, { done: 18, want: 25 }); ok(p.title.startsWith("Partly done: 18 of 25"), p.title);
+  }));
+  test("today: the after-lifting cardio is ticked off by today's cardio", () => {
+    const old = Object.assign({}, ...[8, 10, 12, 14, 16, 18].map(i => session(ago(i), entry("deadlift", 50, 5))));
+    const st = extra => ({ settings: { unit: "lb", week: { lifts: 3, cardio: 3, cardioMin: 90 } }, sessions: { ...old, ...session(today, entry("deadlift", 50, 5)) }, ...extra });
+    scene(st({}), () => { const a = planDay(today).addon; ok(a && !a.done, "still to do after lifting"); });
+    scene(st({ cardio: [walk(today, 25)] }), () => { const a = planDay(today).addon; ok(a && a.done, "covered by the walk"); });
+  });
+
   test("readiness: the ring shows with a score, pills without one", () => {
     const h = readinessRing({ readiness: 86, sleepScore: 78, sleepHours: 9.4, hrv: 47, bodyBatteryWake: 97 }, false, { weightLb: 156.5, bodyFatPct: 15.1 });
     ok(h.includes("Battery"), "battery"); ok(h.includes("15.1% fat"), "weight"); ok(!h.includes("<details"), "nothing folded");

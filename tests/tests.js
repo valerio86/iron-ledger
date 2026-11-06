@@ -215,6 +215,23 @@ function run() {
     sessions: { ...session(ago(9), { ...entry("deadlift", 60, 8), rLo: 5, rHi: 8 }), [ago(2)]: { date: ago(2), deload: true, entries: [entry("deadlift", 55, 5, "easy", 2)] } }, settings: bigGear }, () => {
     const p = progression("deadlift", today); eq(p.last.day, ago(9)); ok(p.bump > 0, "carries on from the full session");
   }));
+  const dlWeek = { ...bigGear, deloads: [{ start: today, end: addDays(today, 6) }] };
+  test("deload: each card shows last full session → today's lighter version", () => scene({
+    sessions: { ...session(ago(3), { ...entry("deadlift", 100, 8), rLo: 5, rHi: 8 }, entry("pushup", 0, 15)) }, settings: dlWeek }, () => {
+    const d = deloadPlan("deadlift", today); eq([d.n, d.w, d.r], [2, 90, 5]);
+    const b = deloadPlan("pushup", today); eq([b.n, b.w, b.r], [2, 0, 10], "bodyweight: same load, ⅔ reps");
+    const e = newEntry("deadlift", today); eq(e.sets.map(s => [s.w, s.r]), [[90, 5], [90, 5]], "added mid-deload starts light");
+    S.sessions[today] = { date: today, deload: true, entries: [e] };
+    const c = adviceCtx(today), h = () => renderEntry(e, 0, today, {}, c);
+    ok(h().includes("Last full:") && h().includes("90 lb × 5, 2 sets"), "line"); ok(!h().includes("Same again"), "no undo button");
+    ok(!/Add |Try |Hold the weight/.test(h()), "no progression text"); ok(!h().includes("dlapply"), "matches");
+    e.sets[0].w = 100; ok(h().includes("dlapply"), "Use deload after an edit");
+  }));
+  test("deload: Start fills the deload sets from the last full session", () => scene({
+    sessions: session(ago(3), { ...entry("deadlift", 100, 8, "solid", 4), rLo: 5, rHi: 8 }), routines: R1, settings: dlWeek }, () => {
+    const it = adaptRoutine(S.routines.r, today).items[0], d = deloadPlan(it.ex, today, it.sets, it.r);
+    eq([d.n, d.w, d.r], [2, 90, 5]);
+  }));
   test("deload: no PR or volume nudges during the week", () => scene({
     sessions: steadyWeeks(3), health: { [today]: { readiness: 85 } }, settings: { ...bigGear, deloads: [{ start: ago(1), end: addDays(today, 5) }] } }, () => {
     const m = coach(today).msgs; ok(m.some(x => x.t.includes("Deload week</b>, day 2 of 7")), "banner"); ok(!m.some(x => /push for a PR|Light this week/.test(x.t)), "nudges");

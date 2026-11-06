@@ -1026,6 +1026,17 @@ function deloadDue(day) {
 }
 // Deload weight: ~90%, rounded to the lift's step. When the step is too coarse for that, hold the weight (fewer sets and reps in reserve still make it light)
 function deloadWeight(w, inc) { const x = Math.round(w * DELOAD_W / (inc || 5)) * (inc || 5); return x > 0 && x < w ? x : w; }
+function deloadDay(day) { return !!(S.sessions[day]?.deload || deloadOn(day)); }
+// The deload version of a lift, from the last full session: about half the sets (or n), weighted lifts at ~90% from the range bottom
+// (rBase), bodyweight and timed work at the same load for about ⅔ of the reps or seconds
+function deloadPlan(exId, day, n, rBase) {
+  const L = progression(exId, day)?.last; if (!L) return null;
+  const ex = exById(exId), src = doneSets(L.e);
+  const top = Math.max(...src.map(s => s.w || 0)), maxR = Math.max(...src.map(s => s.r || 0));
+  const w = ex.kind === "weight" ? deloadWeight(top, ex.inc) : top;
+  const r = ex.kind === "weight" ? (rBase || L.e.rLo || maxR) : Math.max(1, Math.round(maxR * 2 / 3));
+  return { n: n || Math.ceil(src.length / 2), w, r, top, last: L };
+}
 function liftedOn(day) { return !!S.sessions[day]?.entries?.some(e => doneSets(e).length); }
 function cardioOn(fromDay, toDay) { return S.cardio.filter(a => a.day >= fromDay && a.day <= toDay && !CARDIO_SPORTS_EXCL.has(a.sport) && a.mins >= 15).sort((a, b) => a.t - b.t); }
 function routineOf(day) {
@@ -1892,6 +1903,12 @@ function renderEntry(e, i, day, fatPre, actx) {
   const lastTxt = ex.kind !== "time" && lastSets.length && lastSets.every(x => (x.w || 0) === (lastSets[0].w || 0))
     ? `${doneTxt(lastSets[0]).replace(/ × \d+$/, "")} × ${lastSets.map(x => x.r).join(", ")}` : lastSets.map(doneTxt).join(" · ");
   const same = lastSets.length === e.sets.length && lastSets.every((x, k) => (x.w || 0) === (e.sets[k].w || 0) && x.r === e.sets[k].r);
+  // Deload week: one line, last full session → today's lighter version, in place of "Last" and the progression hint
+  let dp = deloadDay(day) && prog?.last ? deloadPlan(e.ex, day) : null;
+  if (dp && e.dl) dp = { ...dp, ...e.dl };
+  const dlSame = dp && e.sets.length === dp.n && e.sets.every(s => (s.w || 0) === dp.w && s.r === dp.r);
+  const dlHint = dp && !e.sets.some(s => s.done) ? `<div class="hint info dlhint">${srcBtn("deload")} <b>Last full:</b> <span class="num">${lastTxt}</span> → <b>Deload:</b> <span class="num">${doneTxt(dp)}, ${dp.n} set${dp.n > 1 ? "s" : ""}</span>.
+    ${ex.kind === "weight" && dp.w >= dp.top ? "Same weight (the step is too big to drop). " : ""}${ex.kind === "time" ? "Stop well before it gets hard." : "Stop with 3–4 reps left."}${dlSame ? "" : ` <button class="linkbtn" data-act="dlapply" data-i="${i}">Use deload</button>`}</div>` : "";
   const rows = e.sets.map((s, j) => s.done ? `
     <div class="setrow done">
       <span class="idx">${j + 1}</span>
@@ -1915,8 +1932,9 @@ function renderEntry(e, i, day, fatPre, actx) {
         <button class="x" data-act="rm" data-i="${i}" aria-label="Remove ${esc(ex.name)}">×</button></div>
       ${adv.lvl ? `<div class="hint ${adv.lvl >= 2 ? "bad" : "warn"}"><b>${adv.lvl >= 2 ? "Not the best right now" : "Careful"}:</b> ${esc(adv.reasons.join("; "))}.${adv.alts.length ? `<div class="swaps">Swap for: ${adv.alts.map(a => `<button class="chipbtn" data-act="swap" data-i="${i}" data-id="${esc(a.id)}">${esc(a.name)}</button>`).join("")}</div>` : ""}</div>` : ""}
       ${!prog && ex.kind === "weight" && !e.sets.some(s => s.done || s.w) ? `<div class="hint info">First time: pick a weight you could lift 2–3 more reps than the target with good form. Go lighter if unsure; the coach takes it from there.</div>` : ""}
-      ${lastSets.length && !same && !e.sets.some(s => s.done) ? `<div class="lastline small muted">Last: <span class="num">${lastTxt}</span> <button class="linkbtn" data-act="repeat" data-i="${i}">Same again</button></div>` : ""}
-      ${prog && !e.sets.some(s => s.done) ? renderProgHint(prog, hold, e, i, day) : ""}
+      ${dlHint}
+      ${!dp && lastSets.length && !same && !e.sets.some(s => s.done) ? `<div class="lastline small muted">Last: <span class="num">${lastTxt}</span> <button class="linkbtn" data-act="repeat" data-i="${i}">Same again</button></div>` : ""}
+      ${prog && !dp && !e.sets.some(s => s.done) ? renderProgHint(prog, hold, e, i, day) : ""}
       ${allDone || knowsColumns() ? "" : `<div class="setrow small muted" aria-hidden="true"><span></span><span class="label">${ex.kind === "time" ? "" : ex.kind === "bodyweight" ? "Added load" : "Weight"}</span><span class="label">${ex.kind === "time" ? "Seconds" : "Reps"}</span><span></span></div>`}
       ${rows}
       <div class="foot">
@@ -2635,6 +2653,9 @@ function closeHelp() { $("#help").innerHTML = ""; }
 function newEntry(exId, day) {
   const ex = exById(exId);
   const p = progression(exId, day);
+  const dp = deloadDay(day) && deloadPlan(exId, day);   // added during a deload week: start it light too
+  if (dp) return { id: uid(), ex: exId, sets: Array.from({ length: dp.n }, () => ({ w: dp.w, r: dp.r, done: false })), effort: null, dl: { n: dp.n, w: dp.w, r: dp.r },
+    ...(dp.last.e.rHi ? { rLo: dp.last.e.rLo, rHi: dp.last.e.rHi } : {}) };
   if (p?.last) {
     const sets = p.last.e.sets.map(s => ({ w: s.w || 0, r: s.r, done: false }));
     return { id: uid(), ex: exId, sets, effort: null, ...(p.last.e.rHi ? { rLo: p.last.e.rLo, rHi: p.last.e.rHi } : {}) };
@@ -2699,7 +2720,10 @@ document.addEventListener("click", async ev => {
         // carry last session's reps forward inside the range; start new lifts at the bottom (and always in a deload)
         const lastR = p?.last ? Math.max(...p.last.e.sets.map(x => x.r || 0)) : it.r;
         const r = dl ? it.r : p?.capped ? p.nextR : p?.resetReps ? it.r : Math.min(it.rHi || lastR, Math.max(it.r, lastR));
-        e.sets = Array.from({ length: trim ? Math.max(1, it.sets - 1) : it.sets }, () => ({ w, r, done: false }));
+        const dp = dl && deloadPlan(it.ex, S.day, it.sets, it.r);
+        e.sets = dp ? Array.from({ length: dp.n }, () => ({ w: dp.w, r: dp.r, done: false }))
+          : Array.from({ length: trim ? Math.max(1, it.sets - 1) : it.sets }, () => ({ w, r, done: false }));
+        if (dp) e.dl = { n: dp.n, w: dp.w, r: dp.r };
         if (it.rHi) { e.rLo = it.r; e.rHi = it.rHi; }
         s.entries.push(e); } s.routine = r.id; if (r.slots) s.slots = r.slots; s.finished = false; });
       toast(`Started ${r.name}${dl ? " as a deload" : plan.changes.length ? ` with ${plan.changes.length} change${plan.changes.length > 1 ? "s" : ""} for today` : ""}${trim ? `, one set lighter (${trim})` : ""}`); break;
@@ -2725,6 +2749,7 @@ document.addEventListener("click", async ev => {
     case "r+": case "r-": mutate(() => { const st = E().sets[j]; const d = exById(E().ex).kind === "time" ? 5 : 1; st.r = Math.max(0, st.r + (act === "r+" ? d : -d)); }); break;
     case "effort": mutate(() => { E().effort = E().effort === b.dataset.v ? null : b.dataset.v; }); break;
     case "addset": mutate(() => { const l = E().sets[E().sets.length - 1]; E().sets.push({ w: l.w, r: l.r, done: false }); }); break;
+    case "dlapply": mutate(() => { const d = E().dl || deloadPlan(E().ex, S.day); if (d) E().sets = Array.from({ length: d.n }, () => ({ w: d.w, r: d.r, done: false })); }); toast("Back to the deload sets"); break;
     case "repeat": mutate(() => { const L = progression(E().ex, S.day).last; E().sets = doneSets(L.e).map(x => ({ w: x.w || 0, r: x.r, done: false })); }); toast("Loaded last time's sets"); break;
     case "weekedit": S.weekEdit = !S.weekEdit; render(); break;
     case "tipok": case "tipsreset": S.settings = { ...S.settings, tipsSeen: act === "tipsreset" ? [] : [...new Set([...(S.settings.tipsSeen || []), b.dataset.k])] }; render(); if (act === "tipsreset") toast("Tips will show again"); await saveDoc("settings/main", S.settings); break;

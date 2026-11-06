@@ -717,8 +717,13 @@ async function loadHealth() {
   }, { refetchInterval: 60 * 60e3, cache: { staleTime: 10 * 60e3 } });
 }
 const CARDIO_SPORTS_EXCL = new Set(["Walk"]);   // walks are daily life, not training cardio: only their Zone 2 minutes (a.z2) count
+// Training minutes of one activity: a walk's time in Zone 2, anything else in full. A walk with 15+ of them is a Zone 2 session
+function cardioMins(a) { return CARDIO_SPORTS_EXCL.has(a.sport) ? a.z2 || 0 : a.mins; }
+const isZ2Walk = a => CARDIO_SPORTS_EXCL.has(a.sport) && cardioMins(a) >= 15;
+// Close enough to the plan to call it done (40 → 36, 15 → 14)
+const metMins = (done, want) => done >= Math.ceil(want * .9);
 function cardioMinutes(fromDay, toDay) {
-  return S.cardio.filter(a => a.day >= fromDay && a.day <= toDay).reduce((n, a) => n + (CARDIO_SPORTS_EXCL.has(a.sport) ? a.z2 || 0 : a.mins), 0);
+  return S.cardio.filter(a => a.day >= fromDay && a.day <= toDay).reduce((n, a) => n + cardioMins(a), 0);
 }
 function healthOn(day) { return S.health[day] || null; }
 function latestWeight(day) {  // most recent weigh-in on or before `day`
@@ -1038,7 +1043,7 @@ function deloadPlan(exId, day, n, rBase) {
   return { n: n || Math.ceil(src.length / 2), w, r, top, last: L };
 }
 function liftedOn(day) { return !!S.sessions[day]?.entries?.some(e => doneSets(e).length); }
-function cardioOn(fromDay, toDay) { return S.cardio.filter(a => a.day >= fromDay && a.day <= toDay && !CARDIO_SPORTS_EXCL.has(a.sport) && a.mins >= 15).sort((a, b) => a.t - b.t); }
+function cardioOn(fromDay, toDay) { return S.cardio.filter(a => a.day >= fromDay && a.day <= toDay && cardioMins(a) >= 15).sort((a, b) => a.t - b.t); }
 function routineOf(day) {
   const s = S.sessions[day]; if (!s) return null;
   if (s.routine && S.routines[s.routine]) return S.routines[s.routine];
@@ -1128,7 +1133,7 @@ function planDay(day) {
   const minsT = wk.cardioMin, minsDone = cardioMinutes(addDays(day, -6), yest);
   // The long session builds a week at a time: your longest in the 3 weeks before this one, +10 min, up to the usual 45.
   // While it's building, no other session is planned longer than it
-  const longest = Math.max(0, ...cardioOn(addDays(day, -28), addDays(day, -7)).map(a => a.mins));
+  const longest = Math.max(0, ...cardioOn(addDays(day, -28), addDays(day, -7)).map(cardioMins));
   const longMin = Math.min(45, Math.max(25, Math.round((longest + 10) / 5) * 5)), building = longMin < 45;
   const perSess = Math.min(building ? longMin : 60, Math.max(20, Math.round((minsT - minsDone) / Math.max(1, wk.cardio - cardio.length) / 5) * 5));
   const cardioShort = cardio.length < wk.cardio || minsDone < minsT * .8;
@@ -1144,7 +1149,7 @@ function planDay(day) {
   const cardioPick = () => {
     if (dl) return { kind: "cardio", mins: Math.min(30, perSess), title: `Easy Zone 2: ${cardioWords()}`, note: `${Math.min(30, perSess)} min${z2Text()}. Deload week: keep it easy, and no long session.` };
     if (tr.hrvDown || tr.rhrUp) return { kind: "cardio", mins: 25, title: "Short easy cardio, or rest", note: `20–30 min, conversational${z2Text()}. Recovery is dipping, and cardio is the first thing to cut, before lifting.` };
-    if (!cardio.some(a => a.mins >= longMin)) {
+    if (!cardio.some(a => cardioMins(a) >= longMin)) {
       if (building) return { kind: "cardio", mins: longMin, title: `Long Zone 2: ${cardioWords()}`, note: `${longMin} min${longest ? `, about 10 more than your longest in recent weeks (${longest})` : ""}. Easy enough to hold a conversation${z2Text()}. Stop early if you need to; it builds up to 45–60 week by week.` };
       const m = Math.max(45, perSess); return { kind: "cardio", mins: m, title: `Long Zone 2: ${cardioWords()}`, note: `${m}–${m + 15} min, easy enough to hold a conversation${z2Text()}.` };
     }
@@ -1171,8 +1176,20 @@ function planDay(day) {
   const start = lastR && rotation.includes(lastR.id) ? (rotation.indexOf(lastR.id) + 1) % rotation.length : 0;
   const order = rotation.map((_, i) => S.routines[rotation[(start + i) % rotation.length]]);
 
+  // Well behind on cardio minutes and recovering fine → stack a short easy session after lifting. Ticked off once today's cardio covers it
+  const todayMins = cardioMinutes(day, day);
+  const addonFor = () => {
+    if (!(minsDone < minsT * .6 && !dl && !isNewcomer(day) && !tr.hrvDown && !tr.rhrUp && !low && !tiredNote)) return null;
+    const m = Math.min(25, Math.max(15, Math.round((minsT - minsDone) / 3 / 5) * 5));
+    return metMins(todayMins, m) ? { mins: m, done: true, text: `${todayMins} min of cardio today covers it.` }
+      : { mins: m, text: `${m} min easy ${lowImpactWords()} after lifting${z2Text()}. You're at ${minsDone + todayMins} of ${minsT} cardio minutes this week.` };
+  };
+
   let p;
-  if (liftedOn(day)) p = { kind: "done", title: `Lifted today: ${routineOf(day)?.name || "custom session"}`, note: "Easy cardio later is fine. No second lift." };
+  if (liftedOn(day)) {
+    p = { kind: "done", title: `Lifted today: ${routineOf(day)?.name || "custom session"}`, note: "Easy cardio later is fine. No second lift." };
+    const add = addonFor(); if (add) { p.addon = add; p.note = "No second lift."; }
+  }
   else if (sick) p = { kind: "rest", title: "Rest", note: "You noted feeling sick. Training while ill slows recovery from both. Come back when you've had a day without symptoms." };
   else if (poor) p = { kind: "rest", title: "Rest or light mobility", note: "10–20 min. Readiness is poor; a hard session today costs more than it builds." };
   else if (streak >= 6) p = { kind: "rest", title: "Rest day", note: `You've trained ${streak} days in a row. Take one fully off.` };
@@ -1195,11 +1212,7 @@ function planDay(day) {
         : tr.hrvDown || tr.rhrUp ? "Lift as planned, but hold your weights. No PR attempts while HRV is below your usual."
         : h.readiness >= 75 ? "You're well recovered. Good day to push the top of your rep ranges." : "" };
       p.trim = dl ? null : trimReason(day);
-      // Well behind on cardio minutes and recovering fine → stack a short easy session after lifting
-      if (minsDone < minsT * .6 && !dl && !isNewcomer(day) && !tr.hrvDown && !tr.rhrUp && !low && !tiredNote) {
-        const m = Math.min(25, Math.max(15, Math.round((minsT - minsDone) / 3 / 5) * 5));
-        p.addon = { mins: m, text: `${m} min easy ${lowImpactWords()} after lifting${z2Text()}. You're at ${minsDone} of ${minsT} cardio minutes this week.` };
-      }
+      const add = addonFor(); if (add) p.addon = add;
       if (built) {}
       else if (pick !== order[0]) {
         const r0 = order[0], b0 = blockedIn(r0), t0 = tiredIn(r0);
@@ -1210,7 +1223,12 @@ function planDay(day) {
     }
   } else if (cardioShort) p = cardioPickSafe();
   else p = { kind: "rest", title: "Rest or light mobility", note: "Lifting and cardio are both on target for the week." };
-  if (todayCardio.length && p.kind === "cardio") p = { kind: "done", title: `Cardio done: ${todayCardio[todayCardio.length - 1].name}`, note: `${todayCardio[todayCardio.length - 1].mins} min.`, cardio: todayCardio[todayCardio.length - 1] };
+  // Cardio day: done once today's minutes reach the plan; less than that is partly done, with the rest optional
+  if (p.kind === "cardio" && todayMins) {
+    const want = p.mins || 30, last = todayCardio[todayCardio.length - 1];
+    if (last && metMins(todayMins, want)) p = { kind: "done", title: `Cardio done: ${last.name}`, note: `${todayMins} min.`, cardio: last };
+    else p = { ...p, partial: { done: todayMins, want }, title: `Partly done: ${todayMins} of ${want}′`, note: `${p.title}. ${want - todayMins} more min if you feel like it${z2Text()}.${last ? " It already counts as a session." : ""}` };
+  }
   p.alts = order.filter(r => r !== p.routine);
   p.why = why;
   return p;
@@ -1627,7 +1645,7 @@ function weekPlans(days, today) {
   return plans;
 }
 function dayMarks(k, today, plans) {
-  const lifted = liftedOn(k), mins = cardioOn(k, k).reduce((a, x) => a + x.mins, 0), marks = [];
+  const lifted = liftedOn(k), mins = cardioOn(k, k).reduce((a, x) => a + cardioMins(x), 0), marks = [];
   const p = k >= today ? plans[k] : null;
   if (lifted) marks.push({ k: "lift", done: true });
   else if (p?.kind === "lift") marks.push({ k: "lift" });
@@ -1802,8 +1820,8 @@ function renderToday() {
       <div class="today-plan">
         ${p.kind === "done" ? `<div class="label">✓ Done</div>` : `<div class="label">${day === today ? "Suggested today" : "Suggested for this day"} <span class="pill ${KIND[p.kind][1]}">${KIND[p.kind][0]}</span>${deloadOn(day) ? ` <span class="pill neutral">Deload</span>` : ""}</div>`}
         <div class="pt">${esc(p.cardio ? p.cardio.name : p.title)}</div>
-        ${p.cardio ? `<div class="small num">${p.cardio.mins}′${p.cardio.re ? ` · effort ${p.cardio.re}` : ""}${p.cardio.z2 ? ` · Zone 2 ${p.cardio.z2}′` : ""}</div>` : p.note ? `<div class="small">${esc(p.note)}</div>` : ""}
-        ${p.addon ? `<div class="small"><b>+ Cardio:</b> ${esc(p.addon.text)}</div>` : ""}
+        ${p.cardio ? `<div class="small num">${p.cardio.mins}′${p.cardio.re ? ` · effort ${p.cardio.re}` : ""}${p.cardio.z2 ? ` · Zone 2 ${p.cardio.z2}′` : ""}${isZ2Walk(p.cardio) ? " · counts as a Zone 2 session" : ""}</div>` : p.note ? `<div class="small">${esc(p.note)}</div>` : ""}
+        ${p.addon ? `<div class="small"><b>${p.addon.done ? "✓" : "+"} Cardio:</b> ${esc(p.addon.text)}</div>` : ""}
         ${main ? `<div class="suggest" style="margin-top:6px">${main}</div>` : ""}
         ${fold("plan-fold", `Why this${other.length ? " and other options" : ""}`, `<div class="plan-more">${more}</div>`)}
       </div>
@@ -2398,7 +2416,7 @@ function renderPlan() {
         <div class="row"><div class="l"><b>Lifting sessions come from ${srcBtn("reps")}</b><div class="small muted">${autoMode() ? "Built each day for balance: a lower, push and pull movement (alternating), plus what's short this week." : "Your routines, in rotation."}</div></div>
           <div class="unit-toggle" role="group" aria-label="Lifting sessions come from">${[["auto", "Balanced"], ["routines", "Routines"]].map(([k, n]) => `<button type="button" data-act="wkmode" data-v="${k}" aria-pressed="${(autoMode() ? "auto" : "routines") === k}">${n}</button>`).join("")}</div></div>
         <div class="row"><div class="l"><b>Lifting sessions</b><div class="small muted">${liftsN} in the last 7 days</div></div>${stepper("lifts", wk.lifts, 2, 5)}</div>
-        <div class="row"><div class="l"><b>Easy cardio sessions</b><div class="small muted">${cardioN} in the last 7 days (15+ min, walks excluded)</div></div>${stepper("cardio", wk.cardio, 0, 6)}</div>
+        <div class="row"><div class="l"><b>Easy cardio sessions</b><div class="small muted">${cardioN} in the last 7 days (15+ min; a walk counts with 15+ min in Zone 2)</div></div>${stepper("cardio", wk.cardio, 0, 6)}</div>
         <div class="row"><div class="l"><b>Cardio minutes a week</b><div class="small muted">${cardioMinutes(addDays(t, -6), t)} in the last 7 days. Walks add their time in Zone 2 (stretches of ${Z2_BOUT}+ min).</div></div>${stepper("cardioMin", wk.cardioMin, 30, 300, 10)}</div>
         <div class="row"><div class="l"><b>Zone 2 heart rate</b><div class="small muted">${z2 ? `${z2.lo}–${z2.hi} bpm${z2.source ? ` (${esc(z2.source)})` : ""}` : "Not set, so walks don't count yet. Your Strava heart-rate zones list it as Zone 2."}</div></div>${z2 ? `${z2Stepper("lo", z2.lo)}${z2Stepper("hi", z2.hi)}` : `<button class="btn" data-act="z2set">Set</button>`}</div>
         <div class="row"><div class="l"><b>Cardio you do</b><div class="suggest" style="margin-top:6px">${Object.entries(CARDIO_TYPES).filter(([k]) => k !== "Walk").map(([k, n]) => `<button class="chipbtn ${cardioTypes().includes(k) ? "primary" : ""}" data-act="cardiotype" data-v="${k}" aria-pressed="${cardioTypes().includes(k)}">${n}</button>`).join("")}</div></div></div>

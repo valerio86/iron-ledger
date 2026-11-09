@@ -277,6 +277,24 @@ table.vt th:first-child, table.vt td:first-child { text-align: left; font-family
 .sw.ok { background: var(--good-soft); box-shadow: inset 0 0 0 1px var(--good); }
 .sw.lo { background: var(--warn-soft); box-shadow: inset 0 0 0 1px var(--warn); }
 .sw.hi { background: var(--bad-soft); box-shadow: inset 0 0 0 1px var(--bad); }
+/* Deload weeks: targets and marks */
+.bar .band.ghost { background: transparent; border-color: var(--muted); opacity: .45; }
+.bar .fill.dlok { background: var(--good); }
+.bar .dlt { position: absolute; top: -3px; bottom: -3px; width: 0; margin-left: -1px; border-left: 2px dashed var(--good); }
+.sw.dlt { width: 0; height: 12px; border-left: 2px dashed var(--good); border-radius: 0; }
+.mw .h.dl { color: var(--fg); font-weight: 600; }
+.mw .c.dl { outline: 1px dashed var(--muted); outline-offset: -1px; }
+.sw.dlw { background: color-mix(in srgb, var(--muted) 14%, transparent); outline: 1px dashed var(--muted); outline-offset: -1px; }
+.chart .dlband { fill: var(--muted); opacity: .12; }
+.chart circle.ghost { fill: var(--surface); stroke: var(--muted); stroke-width: 1.5; }
+.chart circle.ghost.over { stroke: var(--warn); stroke-width: 2; }
+.chart line.cap { stroke: var(--fg); stroke-width: 2; stroke-dasharray: 3 2; opacity: .65; }
+.chart line.ref { stroke: var(--accent); stroke-width: 1.5; stroke-dasharray: 5 4; }
+.chart text.reft { fill: var(--accent); font-size: 10px; }
+.chart .dlbar { fill-opacity: .45; stroke: var(--accent); stroke-dasharray: 3 2; }
+.sw.ghost { width: 8px; height: 8px; border-radius: 50%; background: var(--surface); box-shadow: inset 0 0 0 1.5px var(--muted); }
+.sw.ref { width: 14px; height: 0; border-top: 2px dashed var(--accent); border-radius: 0; }
+.sw.cap { width: 14px; height: 0; border-top: 2px dashed var(--fg); opacity: .65; border-radius: 0; }
 /* Exercise ↔ muscle map */
 .bp { position: relative; display: grid; grid-template-columns: minmax(0, 1.3fr) 48px minmax(0, 1fr); align-items: start; }
 .bp svg.links { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }

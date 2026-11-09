@@ -258,6 +258,41 @@ function run() {
     sessions: steadyWeeks(3), health: { [today]: { readiness: 85 } }, settings: { ...bigGear, deloads: [{ start: ago(1), end: addDays(today, 5) }] } }, () => {
     const m = coach(today).msgs; ok(m.some(x => x.t.includes("Deload week</b>, day 2 of 7")), "banner"); ok(!m.some(x => /push for a PR|Light this week/.test(x.t)), "nudges");
   }));
+  // A steady block with a deload 8–14 days ago: deload sessions are 2 sets at 45
+  const withDl = () => { const s = steadyWeeks(6); for (let i = 8; i <= 14; i++) if (s[ago(i)]) s[ago(i)] = { date: ago(i), deload: true, entries: [entry("deadlift", 45, 5, "easy", 2)] }; return s; };
+  const dlPast = { ...bigGear, deloads: [{ start: ago(14), end: ago(8) }] };
+  test("deload charts: target scales with the deload days in the window", () => scene({ settings: dlWeek }, () => {
+    eq(deloadScale(today, addDays(today, 6)), .5); near(deloadScale(ago(3), addDays(today, 3)), 1 - 4 / 7 * .5); eq(deloadScale(ago(14), ago(8)), 1);
+  }));
+  test("deload charts: usual week leaves deload weeks out, so the week after isn't a spike", () => {
+    const [plain, dl] = [steadyWeeks(6), withDl()].map(ss => scene({ sessions: ss, settings: dlPast }, () => ({ u: usualAvg(today, totalSets), j: jointRatios(today).lowerBack.usual })));
+    near(dl.u, plain.u); near(dl.j, plain.j);
+    eq(usualWeeks(today).length, 4, "no deload → all four weeks");
+  });
+  test("deload charts: joint and muscle targets only in a deload", () => {
+    scene({ sessions: steadyWeeks(6), settings: bigGear }, () => { eq(jointRatios(today).lowerBack.target, null); ok(!renderJointBars(today).includes("dlt")); });
+    scene({ sessions: steadyWeeks(6), settings: dlWeek }, () => {
+      const r = jointRatios(today).lowerBack; ok(r.target > 0 && r.target < r.base, "target under usual");
+      ok(renderJointBars(today).includes("Deload target"), "joint legend"); ok(renderMuscleBars(today).includes("band dl"), "muscle band");
+      const R = weekReview(today); eq(R.below, [], "under range is the point"); ok(/Deload week/.test(R.focus), R.focus);
+    });
+  });
+  test("deload charts: weekly grid marks deload columns", () => scene({ sessions: withDl(), settings: dlPast }, () => ok(renderMuscleWeeks(today).includes("c ok dl") || renderMuscleWeeks(today).includes(" dl\""), "dl cells")));
+  test("deload charts: strength line skips deload sessions, shows them as ghosts with a pre-deload ref", () => scene({ sessions: withDl(), settings: dlPast }, () => {
+    const saved = [S.progEx, S.progView]; S.progEx = "deadlift"; S.progView = "lifts";
+    try {
+      const html = renderProgress();
+      ok(S._chart.ghosts.length > 0 && S._chart.pts.every(p => !S.sessions[p.day].deload), "ghosts off the line");
+      eq(S._chart.refs.length, 1, "one pre-deload ref"); ok(S._vchart.ghosts.every(g => g.cap > 0), "volume ceilings");
+      ok(!html.includes("↓"), "no fake drop"); ok(html.includes("Pre-deload best"), "legend");
+      const el = document.createElement("div"); lineChart(el, S._chart); ok(el.querySelector("circle.ghost") && el.querySelector("line.ref") && el.querySelector(".dlband"), "drawn");
+    } finally { [S.progEx, S.progView] = saved; }
+  }));
+  test("deload charts: rebound after a deload", () => {
+    scene({ sessions: withDl(), settings: dlPast }, () => eq(rebound(today)?.back, ["deadlift"]));
+    scene({ sessions: { ...withDl(), ...session(ago(2), entry("deadlift", 40, 5)), ...session(ago(4), entry("deadlift", 40, 5)), ...session(ago(6), entry("deadlift", 40, 5)) }, settings: dlPast },
+      () => eq(rebound(today)?.notYet, ["deadlift"]));
+  });
 
   // Strength levels
   const bwAt = (lb, n = 1) => ({ [ago(n)]: { weightLb: lb } });

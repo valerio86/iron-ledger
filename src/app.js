@@ -550,13 +550,16 @@ function jointLoad(fromDay, toDay) {
   }
   return { out, by, cardio };
 }
+// target: in a deload, where this week should land (null otherwise): the lifting part scaled by deloadScale, cardio as usual
 function jointRatios(day) {
-  const ac = jointLoad(addDays(day, -6), day), ch = jointLoad(addDays(day, -34), addDays(day, -7)), rw = routineWeekLoad(day);
+  const from = addDays(day, -6), ac = jointLoad(from, day), rw = routineWeekLoad(day), dl = deloadScale(from, day);
+  const uw = usualWeeks(day).map(([f, t]) => jointLoad(f, t)), avg = (j, k) => uw.reduce((a, w) => a + w[k][j], 0) / uw.length;
   return Object.fromEntries(JOINT_ORDER.map(j => {
-    const usual = ch.out[j] / 4, starter = Math.max(JOINT_FLOOR, rw[j] + ch.cardio[j] / 4);
+    const usual = avg(j, "out"), uc = avg(j, "cardio"), starter = Math.max(JOINT_FLOOR, rw[j] + uc);
     const base = Math.max(usual, starter), basis = usual >= starter ? "usual" : "starter";
     const top = Object.entries(ac.by[j]).sort((a, b) => b[1] - a[1]).slice(0, 2).map(([n]) => n);
-    return [j, { acute: ac.out[j], usual, base, basis, ratio: ac.out[j] / base, top }];
+    const target = dl < 1 ? Math.max(0, base - uc) * dl + uc : null;
+    return [j, { acute: ac.out[j], usual, base, basis, ratio: ac.out[j] / base, top, target }];
   }));
 }
 function adviceCtx(day) {
@@ -926,6 +929,21 @@ function historyFor(exId, beforeDay, noDeload) {
   }
   return rows.sort((a, b) => a.day < b.day ? -1 : 1);
 }
+// In the 3 weeks after a deload: has each lift trained in it come back to its pre-deload best (best of the 3 weeks before)?
+function rebound(day) {
+  const r = deloadRanges().filter(r => r.to < day && r.to >= addDays(day, -21)).pop(); if (!r) return null;
+  const ids = new Set(), back = [], notYet = [];
+  for (let d = r.from; d <= r.to; d = addDays(d, 1)) for (const e of S.sessions[d]?.entries || []) if (doneSets(e).length) ids.add(e.ex);
+  for (const id of ids) {
+    const h = historyFor(id, addDays(day, 1), true);
+    const pre = preDeloadBest(h, r), post = h.filter(x => x.day > r.to);
+    if (!pre || !post.length) continue;
+    (Math.max(...post.map(x => x.score)) >= pre * .995 ? back : notYet).push(id);
+  }
+  return back.length || notYet.length ? { back, notYet, r } : null;
+}
+// Best score in the 3 weeks before a deload, from full sessions (h from historyFor(…, true))
+function preDeloadBest(h, r) { const pre = h.filter(x => x.day < r.from && x.day >= addDays(r.from, -21)); return pre.length ? Math.max(...pre.map(x => x.score)) : null; }
 function firstDay() { const ks = Object.keys(S.sessions).filter(k => S.sessions[k].entries?.some(e => doneSets(e).length)).sort(); return ks[0]; }
 
 /* Progression: what to load next time */
@@ -990,12 +1008,37 @@ function isNewcomer(day) { return Object.keys(S.sessions).filter(k => k < day &&
    settings.deloads = [{start, end}], settings.deloadSnooze = day the reminder comes back */
 const DELOAD_DAYS = 7, DELOAD_W = .9;
 function deloadOn(day) { return (S.settings.deloads || []).find(d => d.start <= day && day <= d.end) || null; }
+// A deload week aims for about half a normal week's sets (adaptRoutine halves them), so its load targets are half too
+const DELOAD_VOL = .5;
+// Share of the days from..to (inclusive) that are deload days
+function deloadShare(from, to) { let n = 0, t = 0; for (let d = from; d <= to; d = addDays(d, 1)) { t++; if (deloadDay(d)) n++; } return t ? n / t : 0; }
+// What a window's load should be against a normal week: 1 normally, ~0.5 for a whole deload week, in between when it straddles one
+function deloadScale(from, to) { return 1 - deloadShare(from, to) * (1 - DELOAD_VOL); }
+// The 7-day weeks behind "usual": weeks first…first+3 back from day ([from, to]), leaving out any that touch a deload,
+// which is light on purpose and would make the week after it look like a spike. All four when every one does.
+function usualWeeks(day, first = 1) {
+  const all = [0, 1, 2, 3].map(i => { const k = first + i; return [addDays(day, -7 * k - 6), addDays(day, -7 * k)]; });
+  const full = all.filter(([f, t]) => !deloadShare(f, t));
+  return full.length ? full : all;
+}
+// Average of f(from, to) over those weeks; f returns a number or an object of numbers
+function usualAvg(day, f, first = 1) {
+  const ws = usualWeeks(day, first).map(([a, b]) => f(a, b));
+  if (typeof ws[0] === "number") return ws.reduce((a, b) => a + b, 0) / ws.length;
+  return Object.fromEntries(Object.keys(ws[0]).map(k => [k, ws.reduce((a, w) => a + w[k], 0) / ws.length]));
+}
+// Deload periods as [{from, to}]: the planned weeks plus any session marked deload outside them
+function deloadRanges() {
+  const out = (S.settings.deloads || []).map(d => ({ from: d.start, to: d.end }));
+  for (const [day, s] of Object.entries(S.sessions)) if (s.deload && !out.some(r => r.from <= day && day <= r.to)) out.push({ from: day, to: day });
+  return out.sort((a, b) => a.from < b.from ? -1 : 1);
+}
 // Straight weeks of full training, counting back from this day. A week well under the usual volume, or a deload, ends the run.
 function hardWeeks(day) {
   let n = 0;
   for (let i = 0; i < 10; i++) {
     const end = addDays(day, -7 * i), from = addDays(end, -6), v = totalSets(from, end);
-    const base = totalSets(addDays(end, -34), addDays(end, -7)) / 4;
+    const base = usualAvg(end, totalSets);
     if ((base > 0 && v < base * .6) || (S.settings.deloads || []).some(d => d.start <= end && d.end >= from)) break;
     if (v > 0) n++;
   }
@@ -1540,8 +1583,8 @@ function coach(day) {
 
   // 6. Load spike (acute : chronic)
   const acute = totalSets(addDays(day, -6), day);
-  const chronic = totalSets(addDays(day, -27), day) / 4;
-  if (histDays >= 20 && chronic >= 8) {
+  const chronic = usualAvg(day, totalSets, 0);   // the 4 weeks to today, deload weeks left out
+  if (histDays >= 20 && chronic >= 8 && deloadScale(addDays(day, -6), day) === 1) {
     const r = acute / chronic;
     if (r > 1.5) msgs.push({ lvl: "warn", t: `This week's load is <b>${r.toFixed(1)}×</b> your 4-week average. Ramp up ≤10–20% a week.` });
   }
@@ -1980,43 +2023,56 @@ function renderProgress() {
     return progSeg() + (S.progView === "body" ? renderBody() : S.progView === "load" && ld ? ld : `<section class="block"><h2>Progress</h2><div class="empty"><b>No finished sets yet.</b><span class="small">Once you tick off a few sets, this page charts your strength estimate and volume per lift, your weekly sets per muscle, and your training load.</span></div></section>`); }
   if (!S.progEx || !doneEx[S.progEx]) S.progEx = exIds[0];
   const ex = exById(S.progEx);
-  const h = historyFor(S.progEx);
+  const h = historyFor(S.progEx), hf = historyFor(S.progEx, undefined, true), isDl = r => !!S.sessions[r.day]?.deload;
   const best = Math.max(...h.map(r => r.score)), bs = ex.kind === "weight" ? bestSet(ex.id) : null;
-  const last = h[h.length - 1];
-  const fourAgo = h.filter(r => r.day <= addDays(today, -28)).pop();
+  // Headline and trend come from full sessions: a deload is light on purpose and says nothing about strength
+  const hl = hf.length ? hf : h, last = hl[hl.length - 1];
+  const fourAgo = hl.filter(r => r.day <= addDays(today, -28)).pop();
   const fmtScore = v => ex.kind === "weight" ? toDisp(v) : Math.round(v);
   const scoreUnit = ex.kind === "weight" ? unit() + (PER_HAND.has(ex.id) ? " each" : "") : ex.kind === "time" ? "s" : "reps";
   // Change against four weeks ago, or against the first session while there's less history
-  const refR = fourAgo || (h.length > 1 ? h[0] : null), pctCh = refR?.score ? Math.round((last.score / refR.score - 1) * 100) : null;
+  const refR = fourAgo || (hl.length > 1 ? hl[0] : null), pctCh = refR?.score ? Math.round((last.score / refR.score - 1) * 100) : null;
   const trend = pctCh == null ? null : { arrow: pctCh > 0 ? "↑" : pctCh < 0 ? "↓" : "→", pct: Math.abs(pctCh), cls: pctCh > 0 ? "up" : pctCh < 0 ? "down" : "", since: fourAgo ? "in 4 wk" : `since ${fmtDay(refR.day)}` };
   const metricName = ex.kind === "weight" ? "Strength estimate" : ex.kind === "time" ? "Longest hold" : "Most reps in a set";
 
 
   // Weekly totals, last 10 weeks (weeks end today)
   const weeks = [];
-  for (let i = 9; i >= 0; i--) { const end = addDays(today, -7 * i); weeks.push({ end, v: totalSets(addDays(end, -6), end) }); }
-  const acute = weeks[9].v, chronic = (weeks[6].v + weeks[7].v + weeks[8].v + weeks[9].v) / 4;
+  // A week that's partly or wholly a deload gets a target: its usual (deload-free) weeks × deloadScale
+  for (let i = 9; i >= 0; i--) { const end = addDays(today, -7 * i), from = addDays(end, -6), sc = deloadScale(from, end);
+    weeks.push({ end, v: totalSets(from, end), target: sc < 1 ? usualAvg(end, totalSets) * sc : null }); }
+  const acute = weeks[9].v, chronic = usualAvg(today, totalSets, 0), dlT = weeks[9].target;
   const ratio = chronic ? acute / chronic : 0;
-  const rCls = !chronic ? "neutral" : ratio > 1.5 ? "bad" : ratio > 1.3 || ratio < .6 ? "warn" : "good";
-  const rTxt = !chronic ? "Not enough history" : ratio > 1.5 ? "Big jump" : ratio > 1.3 ? "Climbing fast" : ratio < .6 ? "Much lighter" : "Steady";
+  const rCls = dlT != null ? (acute > dlT * DELOAD_SLACK ? "warn" : "good") : !chronic ? "neutral" : ratio > 1.5 ? "bad" : ratio > 1.3 || ratio < .6 ? "warn" : "good";
+  const rTxt = dlT != null ? (acute > dlT * DELOAD_SLACK ? "Heavy for a deload" : "Deload on target") : !chronic ? "Not enough history" : ratio > 1.5 ? "Big jump" : ratio > 1.3 ? "Climbing fast" : ratio < .6 ? "Much lighter" : "Steady";
 
   const sessions = Object.entries(S.sessions).filter(([, s]) => s.entries?.some(e => doneSets(e).length)).sort((a, b) => a[0] < b[0] ? 1 : -1).slice(0, 30);
 
-  S._chart = { pts: h.map(r => ({ day: r.day, v: r.score })), fmt: fmtScore, unit: scoreUnit, kind: "line" };
+  // Deload sessions sit off the line as hollow points in a shaded band; after each deload a dashed line marks the pre-deload best to beat
+  const t0 = h[0].day, bands = deloadRanges().filter(r => r.to >= t0 && r.from <= today);
+  const refs = bands.map(r => { const v = preDeloadBest(hf, r); if (!v) return null;
+    const next = hf.find(x => x.day > r.to); return { from: r.from, to: next ? next.day : today, v, label: "pre-deload best" }; }).filter(Boolean);
+  S._chart = { pts: hf.map(r => ({ day: r.day, v: r.score })), ghosts: h.filter(isDl).map(r => ({ day: r.day, v: r.score })), bands, refs, fmt: fmtScore, unit: scoreUnit, kind: "line" };
   S._wchart = { pts: weeks };
   // Volume per session: weight × reps for loaded lifts, total reps (or seconds) otherwise; same-day entries summed
   const volByDay = {};
   for (const r of h) volByDay[r.day] = (volByDay[r.day] || 0) + entryVolume(r.e, ex);
-  const vpts = Object.keys(volByDay).sort().map(day => ({ day, v: volByDay[day] }));
+  const vall = Object.keys(volByDay).sort().map(day => ({ day, v: volByDay[day] })), dlDay = d => !!S.sessions[d]?.deload;
+  const vpts = vall.filter(p => !dlDay(p.day));
+  // A deload session's volume ceiling: what the deload plan gave it (half the sets, ~90% weight). Well past it isn't a deload.
+  const vghosts = vall.filter(p => dlDay(p.day)).map(p => { const d = deloadPlan(ex.id, p.day);
+    const cap = d ? d.n * (ex.kind === "weight" ? d.w * d.r : d.r) : null; return { ...p, cap, over: cap && p.v > cap * DELOAD_SLACK }; });
   const fmtVol = v => Math.round(ex.kind === "weight" && unit() === "kg" ? v / LB_PER_KG : v).toLocaleString();
   const volUnit = ex.kind === "weight" ? unit() : ex.kind === "time" ? "s" : "reps";
   const volName = ex.kind === "weight" ? "Volume per session" : ex.kind === "time" ? "Total seconds held per session" : "Total reps per session";
-  const vl = vpts[vpts.length - 1], vp = vpts[vpts.length - 2];
+  const vl = vpts[vpts.length - 1], vp = vpts[vpts.length - 2], vgl = vghosts[vghosts.length - 1];
   const volLine = vl ? `<div class="small muted">Latest <b class="num">${fmtVol(vl.v)}</b> ${volUnit}${vp && vp.v > 0 ? ` · previous ${fmtVol(vp.v)} (${vl.v >= vp.v ? "+" : "−"}${Math.abs(Math.round((vl.v / vp.v - 1) * 100))}%)` : ""} · best ${fmtVol(Math.max(...vpts.map(p => p.v)))}</div>` : "";
-  S._vchart = { pts: vpts, fmt: fmtVol, unit: volUnit };
+  const dlNote = bands.length ? `<div class="legend small"><span><i class="sw dlw"></i>Deload week</span><span><i class="sw ghost"></i>Deload session (not in the line)</span>${refs.length ? `<span><i class="sw ref"></i>Pre-deload best to beat</span>` : ""}</div>` : "";
+  const vdlNote = vghosts.some(g => g.cap) ? `<div class="legend small"><span><i class="sw cap"></i>Deload ceiling</span>${vgl?.cap ? `<span>Last deload: ${fmtVol(vgl.v)} of ${fmtVol(vgl.cap)} ${volUnit}${vgl.over ? ` <b class="hot">· heavier than a deload</b>` : ""}</span>` : ""}</div>` : "";
+  S._vchart = { pts: vpts, ghosts: vghosts, bands, fmt: fmtVol, unit: volUnit };
   const hist = sessions.map(([day, s]) => {
     const es = s.entries.filter(e => doneSets(e).length);
-    return `<button data-act="goto" data-day="${day}"><div class="l"><div><b>${fmtDay(day)}</b></div><div class="small muted">${es.map(e => esc(exById(e.ex).name)).join(" · ")}</div></div><span class="num small muted">${es.reduce((a, e) => a + doneSets(e).length, 0)} sets</span></button>`;
+    return `<button data-act="goto" data-day="${day}"><div class="l"><div><b>${fmtDay(day)}</b>${s.deload ? ` <span class="pill neutral">deload</span>` : ""}</div><div class="small muted">${es.map(e => esc(exById(e.ex).name)).join(" · ")}</div></div><span class="num small muted">${es.reduce((a, e) => a + doneSets(e).length, 0)} sets</span></button>`;
   }).join("");
   const lvl = liftLevel(ex.id, today);
   const lifts = `
@@ -2030,11 +2086,13 @@ function renderProgress() {
       </div>
       ${ex.kind === "weight" ? fold("est-info", `<span aria-label="About this estimate">ⓘ</span>`, `<div class="small muted">Your estimated 1-rep max, worked out from your best set each session. It's only accurate on sets close to failure, so treat it as a floor: your real max is probably higher.</div>`, "info") : ""}
       <div class="chart" id="chart1"></div>
+      ${dlNote}
       ${lvl ? `<div class="small herosub"><span class="pill ${lvl.score >= 3 ? "good" : "neutral"}">${lvl.level}${lvl.capped ? "+" : ""}</span>${lvl.next ? ` <span class="muted">${lvl.kind === "reps" ? `${Math.ceil(lvl.next)} reps` : `${fmtW(lvl.next)}${PER_HAND.has(ex.id) ? " each" : ""} est. max`} for ${LEVELS[Math.floor(lvl.score)]}</span>` : ""}</div>` : ""}
       <div class="small muted num herosub">Best ${fmtScore(best)} ${scoreUnit}${bs ? ` · from ${toDisp(bs.w)} × ${bs.r}` : ""}${ex.kind === "weight" && latestWeight(today) ? ` · ${bodyweightRatio(ex.id, best, latestWeight(today).weightLb).toFixed(2)}× bodyweight${PER_HAND.has(ex.id) ? " · both hands" : ""}` : ""}</div>
       <div class="label">${volName}</div>
       ${volLine}
       <div class="chart" id="chart-vol"></div>
+      ${vdlNote}
     </section>
     <section class="block">
       <h2>History</h2>
@@ -2047,10 +2105,10 @@ function renderProgress() {
     ${renderJointBars(today)}
     <section class="block">
       <h2>Weekly workload</h2>
-      <p class="small muted" style="margin:0">Working sets: each ticked set, with easy ones counted as half. Jumps above about 1.5× your average are where tweaks tend to happen.</p>
+      <p class="small muted" style="margin:0">Working sets: each ticked set, with easy ones counted as half. Jumps above about 1.5× your average are where tweaks tend to happen. Deload weeks are left out of the average${weeks.some(w => w.target != null) ? "; their bars are outlined, with a dashed mark at the deload target (about half a usual week)" : ""}.</p>
       <div class="statrow">
         <div class="stat"><div class="label">This week</div><div class="v">${acute.toFixed(0)}<span class="small muted"> sets</span></div></div>
-        <div class="stat"><div class="label">4-wk avg</div><div class="v">${chronic.toFixed(0)}<span class="small muted"> sets</span></div></div>
+        <div class="stat"><div class="label">${dlT != null ? "Deload target" : "4-wk avg"}</div><div class="v">${dlT != null ? `≤${Math.round(dlT)}` : chronic.toFixed(0)}<span class="small muted"> sets</span></div></div>
         <div class="stat"><div class="label">vs average</div><div class="v">${chronic ? ratio.toFixed(1) + "×" : "—"}</div><span class="pill ${rCls}">${rTxt}</span></div>
       </div>
       <div class="label">Working sets per week · last 10 weeks</div>
@@ -2075,19 +2133,23 @@ function renderJointBars(today) {
   const rows = JOINT_ORDER.filter(j => jr[j].acute > 0 || jr[j].usual > 0);
   if (!rows.length) return "";
   const maxV = Math.max(JOINT_FLOOR * 1.6, ...rows.map(j => Math.max(jr[j].acute, jr[j].base) * 1.1));
+  const dl = rows.some(j => jr[j].target != null);
   const bars = rows.map(j => {
-    const r = jr[j], base = r.base;
-    const cls = r.ratio > 1.5 ? "over" : r.ratio > 1.3 ? "warnf" : "";
-    const tip = `${JOINT_NAMES[j]}: ${Math.round(r.acute)} points this week · ${r.basis === "usual" ? "usual week" : "normal week of your plan"} ${Math.round(base)}${r.top.length ? ` · mostly ${r.top.join(", ")}` : ""}`;
+    const r = jr[j], base = r.base, heavy = dl && r.acute > r.target * DELOAD_SLACK;
+    // In a deload the bar is judged against the deload mark: green at or under it, amber when it's not much of a deload
+    const cls = r.ratio > 1.5 ? "over" : r.ratio > 1.3 || heavy ? "warnf" : dl && r.acute > 0 ? "dlok" : "";
+    const tip = `${JOINT_NAMES[j]}: ${Math.round(r.acute)} points this week · ${r.basis === "usual" ? "usual week" : "normal week of your plan"} ${Math.round(base)}${dl ? ` · deload target ${Math.round(r.target)}` : ""}${r.top.length ? ` · mostly ${r.top.join(", ")}` : ""}`;
     return `<div class="bar"><span>${JOINT_NAMES[j][0].toUpperCase() + JOINT_NAMES[j].slice(1)}</span><div class="track" title="${esc(tip)}">
       ${r.acute > 0 ? `<div class="fill ${cls}" style="width:${Math.min(100, r.acute / maxV * 100)}%"></div>` : ""}
-      <div class="usual" style="left:${base / maxV * 100}%"></div></div>
-      <span class="v ${cls ? "hot" : ""}">${r.acute > 0 ? `${r.ratio.toFixed(1)}×` : "—"}</span></div>`;
+      <div class="usual" style="left:${base / maxV * 100}%"></div>
+      ${dl ? `<div class="dlt" style="left:${r.target / maxV * 100}%"></div>` : ""}</div>
+      <span class="v ${cls === "over" || cls === "warnf" ? "hot" : ""}">${r.acute > 0 ? `${r.ratio.toFixed(1)}×` : "—"}</span></div>`;
   }).join("");
   return `
     <section class="block">
       <h2>Joint stress · last 7 days</h2>
-      <p class="small muted" style="margin:0">Reps weighted by how much each exercise stresses the joint (heavier sets count more), plus runs and rows from Strava. The line marks your usual week${Object.values(jr).some(r => r.basis === "starter") ? ", or a normal week of your plan while you're still building history" : ""}. Above 1.5× is a jump your joints haven't adapted to yet.</p>
+      <p class="small muted" style="margin:0">Reps weighted by how much each exercise stresses the joint (heavier sets count more), plus runs and rows from Strava. The line marks your usual week${Object.values(jr).some(r => r.basis === "starter") ? ", or a normal week of your plan while you're still building history" : ""}. Above 1.5× is a jump your joints haven't adapted to yet.${dl ? " This is a deload week: aim to stay at or under the dashed mark (about half your usual lifting, cardio as normal)." : ""}</p>
+      ${dl ? `<div class="legend small"><span><i class="sw usual"></i>Usual week</span><span><i class="sw dlt"></i>Deload target</span></div>` : ""}
       <div class="bars">${bars}</div>
     </section>`;
 }
@@ -2096,9 +2158,10 @@ function weekReview(today) {
   const from = addDays(today, -6), wk = { ...WEEK_DEFAULT, ...(S.settings.week || {}) };
   const days = Array.from({ length: 7 }, (_, i) => addDays(from, i));
   const lifts = days.filter(liftedOn).length, mins = cardioMinutes(from, today);
-  const sp = setsPerMuscle(from, today), ms = Object.keys(MUSCLES).filter(m => MUSCLES[m].lo > 0);
-  const below = ms.filter(m => sp[m] < MUSCLES[m].lo).sort((a, b) => (MUSCLES[b].lo - sp[b]) - (MUSCLES[a].lo - sp[a]));
-  const over = Object.keys(MUSCLES).filter(m => sp[m] > MUSCLES[m].hi);
+  const sp = setsPerMuscle(from, today), ms = Object.keys(MUSCLES).filter(m => MUSCLES[m].lo > 0), dl = deloadScale(from, today);
+  // In a deload, being under the usual range is the point: only going past the deload target is flagged
+  const below = dl < 1 ? [] : ms.filter(m => sp[m] < MUSCLES[m].lo).sort((a, b) => (MUSCLES[b].lo - sp[b]) - (MUSCLES[a].lo - sp[a]));
+  const over = Object.keys(MUSCLES).filter(m => sp[m] > MUSCLES[m].hi * (dl < 1 ? dl * DELOAD_SLACK : 1));
   const bests = {};
   for (const d of days) for (const e of S.sessions[d]?.entries || []) {
     const ex = exById(e.ex), sc = entryScore(e, ex), prev = historyFor(e.ex, d);
@@ -2107,13 +2170,15 @@ function weekReview(today) {
   const jr = jointRatios(today), hot = JOINT_ORDER.find(j => jr[j].acute > 0 && jr[j].ratio > 1.5), tr = recoveryTrend(today);
   const n = m => MUSCLES[m].n.toLowerCase();
   const focus = tr.hrvDown || tr.rhrUp ? "Recovery is dipping. Trim cardio first and hold your lifting weights."
+    : over.length && dl < 1 ? `Ease off ${n(over[0])}: ${Math.round(sp[over[0]])} sets is a lot for a deload (aim for about ${Math.round(MUSCLES[over[0]].hi * dl)}).`
     : over.length ? `Ease off ${n(over[0])}: ${Math.round(sp[over[0]])} sets is past its cap of ${MUSCLES[over[0]].hi}.`
+    : dl < 1 ? "Deload week: about half your usual sets, lighter weights, stop well short of failure. Afterwards, aim to beat your pre-deload numbers."
     : hot ? `Go easier on your ${JOINT_NAMES[hot]}: its load is ${jr[hot].ratio.toFixed(1)}× a normal week.`
     : lifts < wk.lifts ? `Fit in ${wk.lifts - lifts} more lift${wk.lifts - lifts > 1 ? "s" : ""} to reach your ${wk.lifts} a week.`
     : mins < wk.cardioMin * .8 ? `Add cardio: ${mins} of ${wk.cardioMin} minutes.`
     : below.length ? `Add sets for ${n(below[0])}: ${Math.round(sp[below[0]])} of ${MUSCLES[below[0]].lo}.`
     : "Everything is on target. Keep it going.";
-  return { lifts, liftsT: wk.lifts, mins, minsT: wk.cardioMin, inRange: ms.length - below.length - over.filter(m => ms.includes(m)).length, muscles: ms.length, below, over, bests, focus };
+  return { lifts, liftsT: wk.lifts, mins, minsT: wk.cardioMin, inRange: ms.filter(m => inRange(m, sp[m], dl) || (dl < 1 && sp[m] >= .5 && sp[m] <= MUSCLES[m].hi * dl)).length, muscles: ms.length, below, over, bests, focus, deload: dl < 1, rebound: rebound(today) };
 }
 function renderWeekReview(today) {
   const R = weekReview(today), names = l => l.map(m => MUSCLES[m].n.toLowerCase()).join(", ");
@@ -2128,25 +2193,31 @@ function renderWeekReview(today) {
       </div>
       ${bests.length ? `<div class="small"><b>New bests:</b> ${bests.join(", ")}</div>` : ""}
       ${R.below.length ? `<div class="small"><b>Below range:</b> ${names(R.below)}</div>` : ""}
-      ${R.over.length ? `<div class="small"><b>Over the cap:</b> ${names(R.over)}</div>` : ""}
+      ${R.over.length ? `<div class="small"><b>${R.deload ? "Heavy for a deload" : "Over the cap"}:</b> ${names(R.over)}</div>` : ""}
+      ${R.rebound ? `<div class="small"><b>After the deload:</b> ${R.rebound.back.length ? `back above your pre-deload best on ${R.rebound.back.map(id => esc(exById(id).name.toLowerCase())).join(", ")}` : ""}${R.rebound.back.length && R.rebound.notYet.length ? "; " : ""}${R.rebound.notYet.length ? `not yet on ${R.rebound.notYet.map(id => esc(exById(id).name.toLowerCase())).join(", ")}` : ""}.</div>` : ""}
       <div class="small"><b>Next week:</b> ${esc(R.focus)}</div>
     </section>`;
 }
 // Muscles with no minimum count once they've had real work (half a set, the point the weekly grid shows a number)
-function inRange(m, v) { return v >= Math.max(MUSCLES[m].lo, .5) && v <= MUSCLES[m].hi; }
+// s scales the range for a week that's partly or wholly a deload (deloadScale)
+function inRange(m, v, s = 1) { return v >= Math.max(MUSCLES[m].lo * s, .5) && v <= MUSCLES[m].hi * s; }
+// How far over a deload target still counts as a deload
+const DELOAD_SLACK = 1.25;
 function renderMuscleBars(today) {
   const wk = setsPerMuscle(addDays(today, -6), today), cw = cardioLoadPerMuscle(addDays(today, -6), today);
-  const prior = setsPerMuscle(addDays(today, -34), addDays(today, -7));
-  const usualM = m => prior[m] / 4, histOk = (firstDay() || today) <= addDays(today, -14);
+  const prior = usualAvg(today, setsPerMuscle), dl = deloadScale(addDays(today, -6), today);
+  const usualM = m => prior[m], histOk = (firstDay() || today) <= addDays(today, -14);
   const anyCardio = Object.values(cw).some(v => v >= .05);
   const maxV = Math.max(22, ...Object.keys(wk).map(m => Math.max(wk[m] + cw[m], usualM(m))));
   const fmt = v => v.toFixed(v % 1 ? 1 : 0);
   const bars = Object.keys(MUSCLES).filter(m => MUSCLES[m].lo > 0 || wk[m] > 0 || cw[m] >= .05).map(m => {
-    const M = MUSCLES[m], v = wk[m], c = cw[m] >= .05 ? cw[m] : 0;
-    const tip = `${M.n}: ${fmt(v)} lifting sets${c ? ` + ${c.toFixed(1)} from cardio` : ""} · target ${M.lo}–${M.hi}`;
-    return `<div class="bar"><span${inRange(m, v) ? ` class="inrange"` : ""}>${M.n}</span><div class="track" title="${tip}">
-      <div class="band" style="left:${M.lo / maxV * 100}%;width:${(M.hi - M.lo) / maxV * 100}%"></div>
-      ${v > 0 ? `<div class="fill ${v > M.hi ? "over" : ""}" style="width:${Math.min(100, v / maxV * 100)}%"></div>` : ""}
+    const M = MUSCLES[m], v = wk[m], c = cw[m] >= .05 ? cw[m] : 0, lo = M.lo * dl, hi = M.hi * dl;
+    const tip = `${M.n}: ${fmt(v)} lifting sets${c ? ` + ${c.toFixed(1)} from cardio` : ""} · ${dl < 1 ? `deload target ${fmt(lo)}–${fmt(hi)} (normally ${M.lo}–${M.hi})` : `target ${M.lo}–${M.hi}`}`;
+    const fcls = v > M.hi ? "over" : v > hi * (dl < 1 ? DELOAD_SLACK : 1) ? "warnf" : "";
+    return `<div class="bar"><span${inRange(m, v, dl) ? ` class="inrange"` : ""}>${M.n}</span><div class="track" title="${tip}">
+      ${dl < 1 ? `<div class="band ghost" style="left:${M.lo / maxV * 100}%;width:${(M.hi - M.lo) / maxV * 100}%"></div>` : ""}
+      <div class="band${dl < 1 ? " dl" : ""}" style="left:${lo / maxV * 100}%;width:${(hi - lo) / maxV * 100}%"></div>
+      ${v > 0 ? `<div class="fill ${fcls}" style="width:${Math.min(100, v / maxV * 100)}%"></div>` : ""}
       ${c ? `<div class="cfill" style="left:${v / maxV * 100}%;width:${Math.min(100 - v / maxV * 100, c / maxV * 100)}%"></div>` : ""}
       ${histOk && usualM(m) > 0 ? `<div class="usual" style="left:${usualM(m) / maxV * 100}%" title="Usual week: ${fmt(usualM(m))} sets"></div>` : ""}</div>
       <span class="v">${fmt(v)}${c ? `<span class="cv">+${c.toFixed(1)}</span>` : ""}${histOk && v >= 6 && v > Math.max(usualM(m), 4) * 1.5 ? `<span class="cv hot" title="${(v / Math.max(usualM(m), 4)).toFixed(1)}× your usual week">↑</span>` : ""}</span></div>`;
@@ -2154,7 +2225,7 @@ function renderMuscleBars(today) {
   return `
     <section class="block">
       <h2>Sets per muscle · last 7 days</h2>
-      <p class="small muted" style="margin:0">Green band is the productive weekly range, and a muscle's name turns green once it's in it. Secondary muscles count as partial sets; easy sets count half.</p>
+      <p class="small muted" style="margin:0">${dl < 1 ? `Deload week: the green band is the deload target, about half the usual range (the faint outline), and a muscle's name turns green inside it. Going past it means the week isn't really a deload.` : `Green band is the productive weekly range, and a muscle's name turns green once it's in it.`} Secondary muscles count as partial sets; easy sets count half.</p>
       <div class="legend small"><span><i class="sw lift"></i>Lifting sets</span>${anyCardio ? `<span><i class="sw cardio"></i>Cardio load (fatigue only, not counted toward the target)</span>` : ""}${histOk ? `<span><i class="sw usual"></i>Your usual week</span><span><b class="hot">↑</b> well above usual</span>` : ""}</div>
       <div class="bars">${bars}</div>
     </section>`;
@@ -2199,20 +2270,23 @@ function renderLevels(today) {
 function renderMuscleWeeks(today) {
   const start = firstDay(); if (!start) return "";
   const N = 8, weeks = [];
-  for (let i = N - 1; i >= 0; i--) { const end = addDays(today, -7 * i); weeks.push({ end, sp: end >= start ? setsPerMuscle(addDays(end, -6), end) : null }); }
+  for (let i = N - 1; i >= 0; i--) { const end = addDays(today, -7 * i); weeks.push({ end, sp: end >= start ? setsPerMuscle(addDays(end, -6), end) : null, s: deloadScale(addDays(end, -6), end) }); }
+  const anyDl = weeks.some(w => w.sp && w.s < 1);
   const ms = Object.keys(MUSCLES).filter(m => MUSCLES[m].lo > 0 || weeks.some(w => w.sp?.[m] >= .5));
-  const head = `<span></span>${weeks.map((w, i) => `<span class="h">${i === N - 1 ? "now" : i % 2 ? "" : fmtDay(w.end, { month: "numeric", day: "numeric" })}</span>`).join("")}`;
+  const head = `<span></span>${weeks.map((w, i) => `<span class="h${w.s < 1 ? " dl" : ""}"${w.s < 1 ? ` title="Deload week"` : ""}>${i === N - 1 ? "now" : i % 2 ? (w.s < 1 ? "DL" : "") : fmtDay(w.end, { month: "numeric", day: "numeric" })}</span>`).join("")}`;
   const rows = ms.map(m => { const M = MUSCLES[m];
-    return `<span class="n${inRange(m, weeks[N - 1].sp?.[m] ?? 0) ? " inrange" : ""}" title="Target ${M.lo}–${M.hi} sets a week">${M.n}</span>` + weeks.map(w => {
+    return `<span class="n${inRange(m, weeks[N - 1].sp?.[m] ?? 0, weeks[N - 1].s) ? " inrange" : ""}" title="Target ${M.lo}–${M.hi} sets a week">${M.n}</span>` + weeks.map(w => {
       if (!w.sp) return `<span class="c na"></span>`;
-      const v = w.sp[m], cls = v > M.hi ? "hi" : inRange(m, v) ? "ok" : M.lo ? "lo" : "";
-      return `<span class="c ${cls}" title="${M.n}, week to ${fmtDay(w.end, { month: "short", day: "numeric" })}: ${v.toFixed(1)} sets (target ${M.lo}–${M.hi})">${v >= .5 ? Math.round(v) : "·"}</span>`;
+      // A deload week is judged against its own, lower target: under it is the point, not a gap
+      const v = w.sp[m], s = w.s, cls = v > M.hi * (s < 1 ? DELOAD_SLACK * s : 1) ? "hi" : inRange(m, v, s) || (s < 1 && v >= .5 && v <= M.hi * s) ? "ok" : s < 1 ? "" : M.lo ? "lo" : "";
+      const tgt = s < 1 ? `deload target ${(M.lo * s).toFixed(1)}–${(M.hi * s).toFixed(1)}` : `target ${M.lo}–${M.hi}`;
+      return `<span class="c ${cls}${s < 1 ? " dl" : ""}" title="${M.n}, week to ${fmtDay(w.end, { month: "short", day: "numeric" })}: ${v.toFixed(1)} sets (${tgt})">${v >= .5 ? Math.round(v) : "·"}</span>`;
     }).join(""); }).join("");
   return `
     <section class="block">
       <h2>Sets per muscle · weekly trend ${srcBtn("volume")}</h2>
       <p class="small muted" style="margin:0">Each column is the 7 days ending on that date; "now" is the past 7 days. Counted the same way as the bars below. Watch for a muscle that stays amber week after week.</p>
-      <div class="legend small"><span><i class="sw ok"></i>In range</span><span><i class="sw lo"></i>Below range</span><span><i class="sw hi"></i>Over the cap</span></div>
+      <div class="legend small"><span><i class="sw ok"></i>In range</span><span><i class="sw lo"></i>Below range</span><span><i class="sw hi"></i>Over the cap</span>${anyDl ? `<span><i class="sw dlw"></i>Deload week (judged against about half the range)</span>` : ""}</div>
       <div class="mw">${head}${rows}</div>
     </section>`;
 }
@@ -2283,58 +2357,72 @@ function niceTicks(lo, hi, n = 4) {
   if (out.length < 2) out.push(+(b + step).toFixed(6));
   return out;
 }
-function lineChart(el, { pts, fmt, unit: u }) {
+// ghosts: points shown hollow and left off the line (deload sessions), with an optional cap (a ceiling tick) and over flag.
+// bands: [{from, to}] shaded day ranges. refs: [{from, to, v, label}] dashed horizontal reference segments.
+function lineChart(el, { pts, fmt, unit: u, ghosts = [], bands = [], refs = [] }) {
   const W = 640, H = 220, L = 44, R = 14, T = 14, B = 26;
-  if (pts.length < 2) { el.innerHTML = `<p class="small muted" style="margin:8px">Log this lift on two different days to see a trend.</p>`; return; }
-  const t0 = parseDay(pts[0].day).getTime(), t1 = parseDay(pts[pts.length - 1].day).getTime();
-  const vals = pts.map(p => p.v), vmin = Math.min(...vals), vmax = Math.max(...vals);
+  const all = [...pts.map(p => ({ ...p })), ...ghosts.map(p => ({ ...p, ghost: true }))].sort((a, b) => a.day < b.day ? -1 : 1);
+  if (all.length < 2) { el.innerHTML = `<p class="small muted" style="margin:8px">Log this lift on two different days to see a trend.</p>`; return; }
+  const t0 = parseDay(all[0].day).getTime(), t1 = parseDay(all[all.length - 1].day).getTime();
+  const vals = [...all.map(p => p.v), ...ghosts.filter(g => g.cap).map(g => g.cap), ...refs.map(r => r.v)], vmin = Math.min(...vals), vmax = Math.max(...vals);
   const ticks = niceTicks(vmin - (vmax - vmin) * .1 - .5, vmax + (vmax - vmin) * .1 + .5);
   const y0 = ticks[0], y1 = ticks[ticks.length - 1];
   const X = t => L + (t - t0) / Math.max(1, t1 - t0) * (W - L - R), Y = v => T + (1 - (v - y0) / (y1 - y0)) * (H - T - B);
-  const xy = pts.map(p => [X(parseDay(p.day).getTime()), Y(p.v)]);
+  const Xd = d => Math.min(W - R, Math.max(L, X(parseDay(d).getTime())));
+  const xy = pts.map(p => [X(parseDay(p.day).getTime()), Y(p.v)]), axy = all.map(p => [X(parseDay(p.day).getTime()), Y(p.v)]);
   const line = xy.map((p, i) => `${i ? "L" : "M"}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join("");
-  const area = `${line}L${xy[xy.length - 1][0].toFixed(1)},${H - B}L${xy[0][0].toFixed(1)},${H - B}Z`;
+  const area = xy.length > 1 ? `${line}L${xy[xy.length - 1][0].toFixed(1)},${H - B}L${xy[0][0].toFixed(1)},${H - B}Z` : "";
   // first, middle and last dates; the middle one only when it has room (dates bunched at one end would overlap)
-  const xl = [0, Math.floor((pts.length - 1) / 2), pts.length - 1].filter((v, i, a) => a.indexOf(v) === i)
-    .filter((v, i, a) => i === 0 || i === a.length - 1 || (xy[v][0] - xy[a[0]][0] > 70 && xy[a[a.length - 1]][0] - xy[v][0] > 70));
+  const xl = [0, Math.floor((all.length - 1) / 2), all.length - 1].filter((v, i, a) => a.indexOf(v) === i)
+    .filter((v, i, a) => i === 0 || i === a.length - 1 || (axy[v][0] - axy[a[0]][0] > 70 && axy[a[a.length - 1]][0] - axy[v][0] > 70));
   const last = xy[xy.length - 1];
+  const band = b => { const x0 = Xd(b.from) - 6, x1 = Xd(b.to) + 6; return `<rect class="dlband" x="${Math.max(L, x0).toFixed(1)}" y="${T}" width="${Math.max(4, Math.min(W - R, x1) - Math.max(L, x0)).toFixed(1)}" height="${H - T - B}"/>`; };
+  const ref = r => { const xa = Xd(r.from), xb = Xd(r.to), y = Y(r.v).toFixed(1);
+    return `<line class="ref" x1="${xa}" x2="${xb}" y1="${y}" y2="${y}"/>${xb - xa > 80 ? `<text class="reft" x="${xb}" y="${(+y - 4).toFixed(1)}" text-anchor="end">${r.label}</text>` : ""}`; };
   el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Trend chart">
+    ${bands.map(band).join("")}
     ${ticks.map(t => `<line x1="${L}" x2="${W - R}" y1="${Y(t)}" y2="${Y(t)}" stroke="var(--line)" stroke-width="1"/><text x="${L - 6}" y="${Y(t) + 3}" text-anchor="end">${fmt(t)}</text>`).join("")}
-    ${xl.map(i => `<text x="${xy[i][0]}" y="${H - 8}" text-anchor="${i === 0 ? "start" : i === pts.length - 1 ? "end" : "middle"}">${fmtDay(pts[i].day, { month: "short", day: "numeric" })}</text>`).join("")}
-    <path d="${area}" fill="var(--accent-soft)" opacity=".7"/>
-    <path d="${line}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round"/>
+    ${xl.map(i => `<text x="${axy[i][0]}" y="${H - 8}" text-anchor="${i === 0 ? "start" : i === all.length - 1 ? "end" : "middle"}">${fmtDay(all[i].day, { month: "short", day: "numeric" })}</text>`).join("")}
+    ${area ? `<path d="${area}" fill="var(--accent-soft)" opacity=".7"/>` : ""}
+    ${xy.length ? `<path d="${line}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round"/>` : ""}
+    ${refs.map(ref).join("")}
     ${xy.map(p => `<circle cx="${p[0]}" cy="${p[1]}" r="2.5" fill="var(--accent)"/>`).join("")}
-    <circle cx="${last[0]}" cy="${last[1]}" r="5" fill="var(--accent)" stroke="var(--surface)" stroke-width="2"/>
+    ${ghosts.map(g => { const x = X(parseDay(g.day).getTime());
+      return `${g.cap ? `<line class="cap" x1="${x - 7}" x2="${x + 7}" y1="${Y(g.cap)}" y2="${Y(g.cap)}"/>` : ""}<circle class="ghost${g.over ? " over" : ""}" cx="${x}" cy="${Y(g.v)}" r="3.5"/>`; }).join("")}
+    ${last ? `<circle cx="${last[0]}" cy="${last[1]}" r="5" fill="var(--accent)" stroke="var(--surface)" stroke-width="2"/>` : ""}
     <line id="xh" x1="0" x2="0" y1="${T}" y2="${H - B}" stroke="var(--muted)" stroke-dasharray="3 3" visibility="hidden"/>
     <rect x="${L}" y="0" width="${W - L - R}" height="${H}" fill="transparent" id="hit"/>
   </svg><div class="tip" hidden></div>`;
   const svg = el.querySelector("svg"), tip = el.querySelector(".tip"), xh = el.querySelector("#xh");
   const move = ev => {
     const r = svg.getBoundingClientRect(), sx = (ev.clientX - r.left) / r.width * W;
-    let bi = 0; xy.forEach((p, i) => { if (Math.abs(p[0] - sx) < Math.abs(xy[bi][0] - sx)) bi = i; });
-    xh.setAttribute("x1", xy[bi][0]); xh.setAttribute("x2", xy[bi][0]); xh.setAttribute("visibility", "visible");
-    tip.hidden = false; tip.textContent = `${fmtDay(pts[bi].day, { month: "short", day: "numeric" })} · ${fmt(pts[bi].v)} ${u}`;
-    tip.style.left = (xy[bi][0] / W * r.width + 8) + "px"; tip.style.top = (xy[bi][1] / H * r.height + 8) + "px";
+    let bi = 0; axy.forEach((p, i) => { if (Math.abs(p[0] - sx) < Math.abs(axy[bi][0] - sx)) bi = i; });
+    const p = all[bi];
+    xh.setAttribute("x1", axy[bi][0]); xh.setAttribute("x2", axy[bi][0]); xh.setAttribute("visibility", "visible");
+    tip.hidden = false; tip.textContent = `${fmtDay(p.day, { month: "short", day: "numeric" })} · ${fmt(p.v)} ${u}${p.ghost ? ` · deload${p.cap ? `, ceiling ${fmt(p.cap)}` : ""}` : ""}`;
+    tip.style.left = (axy[bi][0] / W * r.width + 8) + "px"; tip.style.top = (axy[bi][1] / H * r.height + 8) + "px";
   };
   svg.addEventListener("pointermove", move); svg.addEventListener("pointerdown", move);
   svg.addEventListener("pointerleave", () => { tip.hidden = true; xh.setAttribute("visibility", "hidden"); });
 }
+// A point with a target (a deload week) gets a hatched bar and a dashed tick at the target
 function barChart(el, { pts, label = "sets" }) {
   const W = 640, H = 180, L = 34, R = 8, T = 12, B = 24;
-  const ticks = niceTicks(0, Math.max(10, ...pts.map(p => p.v)));
+  const ticks = niceTicks(0, Math.max(10, ...pts.map(p => Math.max(p.v, p.target || 0))));
   const y1 = ticks[ticks.length - 1], Y = v => T + (1 - v / y1) * (H - T - B);
   const bw = (W - L - R) / pts.length;
   el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Weekly sets">
     ${ticks.map(t => `<line x1="${L}" x2="${W - R}" y1="${Y(t)}" y2="${Y(t)}" stroke="var(--line)"/><text x="${L - 6}" y="${Y(t) + 3}" text-anchor="end">${t}</text>`).join("")}
     ${pts.map((p, i) => { const x = L + i * bw + 3, h = Math.max(0, H - B - Y(p.v)), w = bw - 6;
       return `<g class="b" data-i="${i}"><rect x="${L + i * bw}" y="${T}" width="${bw}" height="${H - T - B}" fill="transparent"/>
-      ${h > 0 ? `<path d="M${x},${H - B}V${Y(p.v) + Math.min(4, h)}q0,-4 4,-4h${w - 8}q4,0 4,4V${H - B}Z" fill="${i === pts.length - 1 ? "var(--accent)" : "var(--accent-soft)"}"/>` : ""}
+      ${h > 0 ? `<path d="M${x},${H - B}V${Y(p.v) + Math.min(4, h)}q0,-4 4,-4h${w - 8}q4,0 4,4V${H - B}Z" fill="${i === pts.length - 1 ? "var(--accent)" : "var(--accent-soft)"}"${p.target != null ? ` class="dlbar"` : ""}/>` : ""}
+      ${p.target != null ? `<line class="cap" x1="${x - 2}" x2="${x + w + 2}" y1="${Y(p.target)}" y2="${Y(p.target)}"/>` : ""}
       ${i % 3 === 0 || i === pts.length - 1 ? `<text x="${x + w / 2}" y="${H - 8}" text-anchor="middle">${i === pts.length - 1 ? "now" : fmtDay(p.end, { month: "short", day: "numeric" })}</text>` : ""}</g>`; }).join("")}
   </svg><div class="tip" hidden></div>`;
   const svg = el.querySelector("svg"), tip = el.querySelector(".tip");
   svg.querySelectorAll("g.b").forEach(g => {
     const show = () => { const i = +g.dataset.i, p = pts[i], r = svg.getBoundingClientRect();
-      tip.hidden = false; tip.textContent = `Week to ${fmtDay(p.end, { month: "short", day: "numeric" })} · ${p.v.toFixed(0)} ${label}`;
+      tip.hidden = false; tip.textContent = `Week to ${fmtDay(p.end, { month: "short", day: "numeric" })} · ${p.v.toFixed(0)} ${label}${p.target != null ? ` · deload target ~${p.target.toFixed(0)}` : ""}`;
       tip.style.left = ((L + (i + .5) * bw) / W * r.width) + "px"; tip.style.top = (Y(p.v) / H * r.height) + "px"; };
     g.addEventListener("pointerenter", show); g.addEventListener("pointerdown", show);
   });

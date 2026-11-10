@@ -258,6 +258,10 @@ function run() {
     sessions: steadyWeeks(3), health: { [today]: { readiness: 85 } }, settings: { ...bigGear, deloads: [{ start: ago(1), end: addDays(today, 5) }] } }, () => {
     const m = coach(today).msgs; ok(m.some(x => x.t.includes("Deload week</b>, day 2 of 7")), "banner"); ok(!m.some(x => /push for a PR|Light this week/.test(x.t)), "nudges");
   }));
+  test("coach: a hard walk names its muscles, not an empty list", () => scene({ cardio: [{ day: today, name: "Morning Walk", sport: "Walk", mins: 70, re: 35, muscles: { calves: .3, quads: .2 } }, { day: today, name: "Run", sport: "Run", mins: 30, re: 40, muscles: { quads: .7, calves: .6, hamstrings: .5, glutes: .3 } }] }, () => {
+    const t = coach(today).msgs.map(m => m.t).join(" | ");
+    ok(t.includes("also lightly loaded your calves and quads."), t); ok(t.includes("loaded your quads, calves and hamstrings."), t); ok(!/your \./.test(t), "empty list");
+  }));
   // A steady block with a deload 8–14 days ago: deload sessions are 2 sets at 45
   const withDl = () => { const s = steadyWeeks(6); for (let i = 8; i <= 14; i++) if (s[ago(i)]) s[ago(i)] = { date: ago(i), deload: true, entries: [entry("deadlift", 45, 5, "easy", 2)] }; return s; };
   const dlPast = { ...bigGear, deloads: [{ start: ago(14), end: ago(8) }] };

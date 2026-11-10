@@ -1540,8 +1540,13 @@ function coach(day) {
   }
   // 0b. Hard cardio in the last 2 days
   const recentCardio = S.cardio.filter(a => a.re >= 30 && a.day <= day && a.day >= addDays(day, -1) && Object.keys(a.muscles).length);
-  for (const a of recentCardio.slice(0, 2))
-    msgs.push({ lvl: "info", t: `${a.day === day ? "Today's" : "Yesterday's"} <b>${esc(a.name)}</b> (${a.mins} min, effort ${a.re}) also loaded your ${Object.entries(a.muscles).filter(([, w]) => w >= .5).map(([m]) => MUSCLES[m].n.toLowerCase()).join(", ")}.` });
+  for (const a of recentCardio.slice(0, 2)) {
+    // The muscles it works hard (≥ .5); a walk works none that hard, so name its top two and say it was light
+    const ms = Object.entries(a.muscles).filter(([m]) => MUSCLES[m]).sort((x, y) => y[1] - x[1]), main = ms.filter(([, w]) => w >= .5);
+    const pick = (main.length ? main : ms.slice(0, 2)).map(([m]) => MUSCLES[m].n.toLowerCase());
+    const list = pick.length > 1 ? `${pick.slice(0, -1).join(", ")} and ${pick[pick.length - 1]}` : pick[0];
+    if (list) msgs.push({ lvl: "info", t: `${a.day === day ? "Today's" : "Yesterday's"} <b>${esc(a.name)}</b> (${a.mins} min, effort ${a.re}) also ${main.length ? "" : "lightly "}loaded your ${list}.` });
+  }
 
   // 1. Planned work on tired muscles
   const planned = new Set();

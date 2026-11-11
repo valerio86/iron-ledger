@@ -91,6 +91,13 @@ Confidence: **strong** = several meta-analyses agree; **moderate** = one good me
 - **Deloads:** due after 4 hard weeks instead of 5 from age 50.
 - The recovery numbers are a cautious guess, not a measured value.
 
+## 8. Exercise variation
+
+- **Swapping like for like is cheap.** Baz-Valle et al. (2019): 21 trained men, 8 weeks, fixed exercises vs. a random selection each session (picked by an app). Bench and squat 1RM and most muscle-thickness sites improved the same in both groups; only the vastus intermedius grew significantly in the fixed group alone. Intrinsic motivation rose with variation and dipped without it. Kassiano et al. (2024) found practically the same gains with constant vs. varied exercises in 70 untrained women over 10 weeks.
+- **Planned beats random.** Kassiano et al. (2022), a systematic review of 8 studies (241 young men): some *systematic* variation improves regional hypertrophy and maximises dynamic strength; *excessive, random* variation may compromise gains. Pick variations for a reason (angle, region, joint comfort) and avoid redundant ones. Fonseca et al. (2014) is the older trial behind the idea that changing exercises can matter more than changing loads.
+- **Skill-heavy lifts are the exception.** Getting stronger on a squat or deadlift is partly getting better at it, so constant switching of the main lift costs practice.
+- **How the app uses it.** Main lifts stay put through a block (so progression and the record forecast have a history). Change is offered at block boundaries (the week after a deload) and when a lift stalls. One-off swaps on Today are free. Preferences: your order per movement, skip this cycle (asked again after the next deload), never.
+
 ## Sources
 
 - Bell L. et al. (2023). Integrating deloading into strength and physique sports training programmes: an international Delphi consensus approach. *Sports Medicine – Open* 9:87. PMC10511399.
@@ -105,3 +112,7 @@ Confidence: **strong** = several meta-analyses agree; **moderate** = one good me
 - Barbell Medicine, "Progressive Loading Part 3: The Death of the Novice-Intermediate-Advanced Framework".
 - Rippetoe M., Kilgore L. *Practical Programming for Strength Training*.
 - McCulloch masters age coefficients: APF Best Lifter formula page (worldpowerliftingcongress.com) and Global Powerlifting Alliance master age formula.
+- Kassiano W. et al. (2022). Does varying resistance exercises promote superior muscle hypertrophy and strength gains? A systematic review. *J Strength Cond Res* 36(6):1753–1762. PMID 35438660.
+- Baz-Valle E. et al. (2019). The effects of exercise variation in muscle thickness, maximal strength and motivation in resistance trained men. *PLoS One* 14(12):e0226989.
+- Kassiano W. et al. (2024). Muscle hypertrophy and strength adaptations to systematically varying resistance exercises. *Res Q Exerc Sport*. ro.ecu.edu.au/ecuworks2022-2026/4912.
+- Fonseca R. et al. (2014). Changes in exercises are more effective than in loading schemes to improve muscle strength. *J Strength Cond Res* 28(11):3085–3092.

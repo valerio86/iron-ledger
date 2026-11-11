@@ -1582,7 +1582,7 @@ function coach(day) {
     const nb = newBlock(day);
     if (nb && autoMode() && prefs().block !== nb.end) {
       const rows = blockOffers(day);
-      if (rows.length) msgs.push({ lvl: "info", ic: "↻", t: `<b>New block.</b> A good time to change a main lift for variety; whatever you pick, you keep for the block so progress can build.
+      if (rows.length) msgs.push({ lvl: "info", ic: "↻", t: `${srcBtn("variety")} <b>New block.</b> A good time to change a main lift for variety; whatever you pick, you keep for the block so progress can build.
         <div class="blockrows">${rows.map(o => `<div><span class="small"><b>${SLOT_SUBS[o.sub][0]}:</b> ${esc(exById(o.cur).name)}</span> ${o.alts.map(a => `<button class="chipbtn" data-act="prefer" data-sub="${o.sub}" data-id="${esc(a)}">Try ${esc(exById(a).name)}</button>`).join("")}</div>`).join("")}</div>
         <div class="swaps"><button class="chipbtn primary" data-act="blockdone" data-v="${nb.end}">Done</button></div>` });
     }
@@ -1766,6 +1766,7 @@ function render() {
 const TIPS = {
   plan: "This is today's suggestion. The coach picks lift, cardio or rest from your last 7 days and how recovered you are. Tap <b>Start</b> to load the sets, or pick something else below.",
   tick: "Set the weight and reps, then tap <b>✓</b> when the set is done. Only ticked sets count toward your progress and the coach's advice.",
+  swap: "Tap <b>⇄</b> next to an exercise to swap it. <b>Today</b> is a one-off. You can also set it aside until your next deload, or for good. Your order inside each movement is under Plan → Exercises.",
   coach: "The coach's notes fold up here while you train: weekly gaps, new bests and things to watch. Anything serious stays open on its own.",
 };
 const tip = k => (S.settings.tipsSeen || []).includes(k) ? "" : `<div class="ftip" role="note"><div>${TIPS[k]}</div><button class="linkbtn" data-act="tipok" data-k="${k}">Got it</button></div>`;
@@ -1953,6 +1954,10 @@ function renderToday() {
 
   if (phase === "plan") {
     const adapt = p.kind === "lift" ? adaptRoutine(p.routine, day) : null;
+    const lessOne = !adapt?.deload && trimReason(day);   // Start loads one set fewer on a lighter day
+    const planEx = adapt ? `<div class="planex">${applyPre(adapt.items, day).map(it => { const n = exById(it.ex).name, sets = lessOne ? Math.max(1, it.sets - 1) : it.sets;
+      return `<div class="pxrow"><span class="nm">${esc(n)}${it.from ? ` <span class="small muted">· swapped</span>` : ""}</span><span class="small muted num">${sets}×${it.r}${it.rHi && it.rHi !== it.r ? "–" + it.rHi : ""}${exById(it.ex).kind === "time" ? "s" : ""}</span>
+        <button class="linkbtn" data-act="swapsheet" data-pre="${esc(it.ex)}" data-orig="${esc(it.from || it.ex)}" data-rid="${esc(p.routine.id)}" aria-label="Swap ${esc(n)}">⇄</button></div>`; }).join("")}</div>` : "";
     const main = adapt ? `<button class="btn primary big" data-act="routine" data-id="${esc(p.routine.id)}">▶ Start ${esc(p.routine.name)}${adapt.changes.length ? " (adjusted)" : p.trim ? " (lighter)" : ""}</button>`
       : p.kind === "cardio" ? `<button class="btn primary big" data-act="cl-open">+ Log cardio</button>` : "";
     const other = [];
@@ -1964,7 +1969,7 @@ function renderToday() {
       <ul class="why">${p.why.map(w => `<li>${w}</li>`).join("")}</ul>
       ${other.length ? `<div class="label">Or do this instead</div><div class="suggest">${other.join("")}</div>` : ""}`;
     const top = msgs.slice(0, 2), rest = msgs.slice(2);
-    return `${daynav}${noteHtml}${p.kind === "lift" ? tip("plan") : ""}
+    return `${daynav}${noteHtml}${p.kind === "lift" ? tip("plan") || tip("swap") : ""}
     <div class="coach" aria-label="Coach">
       ${vitHtml}
       <div class="today-plan">
@@ -1972,6 +1977,7 @@ function renderToday() {
         <div class="pt">${esc(p.cardio ? p.cardio.name : p.title)}</div>
         ${p.cardio ? `<div class="small num">${p.cardio.mins}′${p.cardio.re ? ` · effort ${p.cardio.re}` : ""}${p.cardio.z2 ? ` · Zone 2 ${p.cardio.z2}′` : ""}${isZ2Walk(p.cardio) ? " · counts as a Zone 2 session" : ""}</div>` : p.note ? `<div class="small">${esc(p.note)}</div>` : ""}
         ${p.addon ? `<div class="small"><b>${p.addon.done ? "✓" : "+"} Cardio:</b> ${esc(p.addon.text)}</div>` : ""}
+        ${planEx}
         ${main ? `<div class="suggest" style="margin-top:6px">${main}</div>` : ""}
         ${fold("plan-fold", `Why this${other.length ? " and other options" : ""}`, `<div class="plan-more">${more}</div>`)}
       </div>
@@ -2691,7 +2697,7 @@ function renderPicks() {
   return `
     <section class="block">
       <h2>Your picks</h2>
-      <p class="small muted" style="margin:0">${autoMode() ? "Balanced sessions" : "Balanced sessions (Plan → Your week)"} take the first exercise in each movement that your gear and joints allow. Skipped ones are never suggested by the app, in either mode.</p>
+      <p class="small muted" style="margin:0">${autoMode() ? "Balanced sessions" : "Balanced sessions (Plan → Your week)"} take the first exercise in each movement that your gear and joints allow. ${srcBtn("variety")} Skipped ones are never suggested by the app, in either mode.</p>
       ${moves}
     </section>
     ${sk.length ? `<section class="block">
@@ -2794,31 +2800,34 @@ function openAdd(q = "") {
   inp.oninput = () => openAdd(inp.value);
 }
 // Swap one exercise on Today: just for today, or from now on (it moves to the top of its movement); or stop suggesting it
-function openSwap(i) {
-  const e = S.sessions[S.day]?.entries?.[i]; if (!e) return;
+// o = { i } for an exercise already on Today, or { pre, orig, rid } for one in the plan before Start
+// (pre: the exercise shown, orig: what the plan had there, rid: the plan's routine)
+function openSwap(o) {
+  const exId = o.pre || S.sessions[S.day]?.entries?.[o.i]?.ex; if (!exId) return;
+  const e = { ex: exId }, tgt = o.pre ? `data-pre="${esc(o.pre)}" data-orig="${esc(o.orig)}" data-rid="${esc(o.rid || "")}"` : `data-i="${o.i}"`;
   const ex = exById(e.ex), sub = subOf(e.ex), ctx = adviceCtx(S.day), actx = { ...ctx, noAlts: true };
   const same = sub ? ranked(sub).filter(id => id !== e.ex && canDo(id)) : [];
   const sim = similarEx(e.ex, S.day, ctx, 5).map(x => x.id).filter(id => !same.includes(id));
-  const routine = S.routines[S.sessions[S.day]?.routine];
+  const routine = S.routines[o.pre ? o.rid : S.sessions[S.day]?.routine], base = o.pre ? o.orig : exId;
   // "From now on": balanced sessions follow your order; a routine gets the exercise replaced in it
-  const always = sub && autoMode() ? "Balanced sessions will pick it first" : routine?.items.some(x => x.ex === e.ex) ? `Replaces it in ${routine.name}` : null;
+  const always = sub && autoMode() ? "Balanced sessions will pick it first" : routine?.items.some(x => x.ex === base) ? `Replaces it in ${routine.name}` : null;
   // In balanced mode "from now on" reorders the movement, so it only makes sense inside the same movement
   const row = id => { const a = exerciseAdvice(id, S.day, actx), sk = skipOf(id), keep = always && !sk && (!autoMode() || subOf(id) === sub);
     return `<div class="swaprow"><div class="l"><div>${esc(exById(id).name)} ${helpBtn(id, exById(id).name)}</div>${sk ? `<div class="small muted">${sk.k === "never" ? "On your never list" : "Skipped this cycle"}</div>` : a.lvl ? `<div class="small" style="color:var(--${a.lvl >= 2 ? "bad" : "warn"})">${esc(a.reasons[0])}</div>` : ""}</div>
-      <div class="rowbtns"><button class="chipbtn" data-act="swap" data-i="${i}" data-id="${esc(id)}">Today</button>${keep ? `<button class="chipbtn" data-act="swapalways" data-i="${i}" data-id="${esc(id)}">From now on</button>` : ""}</div></div>`; };
+      <div class="rowbtns"><button class="chipbtn" data-act="swap" ${tgt} data-id="${esc(id)}">Today</button>${keep ? `<button class="chipbtn" data-act="swapalways" ${tgt} data-id="${esc(id)}">From now on</button>` : ""}</div></div>`; };
   const sk = skipOf(e.ex);
   $("#sheet").innerHTML = `<div class="sheet-bg" data-act="closesheet"><div class="sheet" role="dialog" aria-label="Swap ${esc(ex.name)}">
     <div class="sh"><div style="display:flex;justify-content:space-between;align-items:center"><h2>Swap ${esc(ex.name)}</h2><button class="x iconbtn" data-act="closesheet" aria-label="Close">×</button></div>
-    <p class="small muted" style="margin:4px 0 0"><b>Today</b> is a one-off: next time the plan is back to normal.${always ? ` <b>From now on:</b> ${esc(always)}.` : ""}</p></div>
+    <p class="small muted" style="margin:4px 0 0">${srcBtn("variety")} <b>Today</b> is a one-off: next time the plan is back to normal.${always ? ` <b>From now on:</b> ${esc(always)}.` : ""}</p></div>
     <div class="sb">
       ${same.length ? `<div class="label grouphdr">${MOVE_NAMES[sub]}, in your order</div>${same.map(row).join("")}` : ""}
       ${sim.length ? `<div class="label grouphdr">Same muscles</div>${sim.map(row).join("")}` : ""}
       ${!same.length && !sim.length ? `<p class="muted">Nothing similar you can do with your gear.</p>` : ""}
       <div class="label grouphdr">Stop suggesting ${esc(ex.name)}</div>
       ${sk ? `<p class="small muted" style="margin:0">Already ${sk.k === "never" ? "on your never list" : "skipped this cycle"}.</p>` : `<div class="swaps">
-        <button class="chipbtn" data-act="skipex" data-id="${esc(e.ex)}" data-k="cycle" data-i="${i}">For this cycle</button>
-        <button class="chipbtn" data-act="skipex" data-id="${esc(e.ex)}" data-k="never" data-i="${i}">Never</button></div>
-      <p class="small muted" style="margin:0">This cycle: the coach asks after your next deload whether to bring it back. Never: it isn't suggested again (you can still add it). Either way, today's is swapped for your next choice.</p>`}
+        <button class="chipbtn" data-act="skipex" data-id="${esc(e.ex)}" data-k="cycle" ${tgt}>For this cycle</button>
+        <button class="chipbtn" data-act="skipex" data-id="${esc(e.ex)}" data-k="never" ${tgt}>Never</button></div>
+      <p class="small muted" style="margin:0">This cycle: the coach asks after your next deload whether to bring it back. Never: it isn't suggested again (you can still add it). Either way, ${o.pre ? "the plan" : "today's"} switches to your next choice.</p>`}
     </div>
   </div></div>`;
 }
@@ -2905,6 +2914,11 @@ const SOURCES = {
     "With a birth year set, the standards are adjusted outside ages 23–39 using powerlifting's age coefficients (McCulloch for 40 and over, Foster for juniors): at 50 a lift counts about 13% more, at 60 about 34%."],
     refs: [["ExRx strength standards (Kilgore)", "https://exrx.net/Questions/StrengthTests"], ["van den Hoek et al. 2024, powerlifting norms from 809,986 entries (JSAMS)", "https://pubmed.ncbi.nlm.nih.gov/39060209/"], ["Strength Level, community standards", "https://strengthlevel.com/strength-standards"], ["McCulloch masters age coefficients (APF table)", "https://worldpowerliftingcongress.com/wp-content/uploads/2015/02/Glossbrenner.htm"]] },
 };
+SOURCES.variety = { t: "Changing exercises", p: [
+  "Swapping one exercise for another that trains the same muscles doesn't cost you size or strength, and it can help: in a trial where trained men got a random set of exercises each session, gains were about the same as sticking with one set, and they enjoyed training more. A 2024 trial in women found the same.",
+  "A systematic review adds the nuance: some <b>planned</b> variation (different angles for the same muscle) can spread growth more evenly across a muscle, while frequent, random switching can hold back gains, especially on skill-heavy lifts like the squat, where getting better at the movement is part of getting stronger.",
+  "So Iron Ledger keeps your main lifts steady through a training block so progress can be tracked, and offers a change at the start of the next block or when a lift stalls. A one-off swap any day is fine."],
+  refs: [["Kassiano et al. 2022, systematic review of exercise variation (J Strength Cond Res)", "https://pubmed.ncbi.nlm.nih.gov/35438660/"], ["Baz-Valle et al. 2019, random exercise variation in trained men (PLoS One)", "https://doi.org/10.1371/journal.pone.0226989"], ["Kassiano et al. 2024, constant vs varied exercises in women (Res Q Exerc Sport)", "https://ro.ecu.edu.au/ecuworks2022-2026/4912"]] };
 function srcBtn(key) { return `<button class="help src" data-act="src" data-k="${key}" aria-label="Sources: ${esc(SOURCES[key].t)}">?</button>`; }
 function openSource(key) {
   const x = SOURCES[key]; if (!x) return;
@@ -2956,6 +2970,19 @@ function newEntry(exId, day) {
   return { id: uid(), ex: exId, sets: Array.from({ length: 3 }, () => ({ w: 0, r, done: false })), effort: null };
 }
 // Replace an entry on this day with another exercise, keeping its rep range when the kind matches
+// Swaps made on the plan card before Start (session.pre = { planned exercise: swap }), for this day only
+function applyPre(items, day) {
+  const pre = S.sessions[day]?.pre || {};
+  return items.map(it => {
+    const to = pre[it.ex]; if (!to || to === it.ex) return it;
+    const k = exById(to).kind, same = k === exById(it.ex).kind;
+    return { ex: to, sets: it.sets, r: same ? it.r : k === "time" ? 30 : 8, rHi: same ? it.rHi : k === "time" ? 45 : 12, w: 0, from: it.ex };
+  });
+}
+// A balanced session's movements after plan swaps: a swap into another movement takes that turn with it
+function slotsAfter(slots, items) {
+  return slots && [...new Set(slots.map(sub => { const it = items.find(x => subOf(x.from || x.ex) === sub); return it ? subOf(it.ex) : sub; }).filter(Boolean))];
+}
 function swapEntry(i, id) {
   mutate(s => {
     const old = s.entries[i], ne = newEntry(id, S.day);
@@ -2978,6 +3005,7 @@ async function replaceInRoutines(from, to, only) {
   }
   render(); return n;
 }
+function setPre(orig, to) { mutate(s => { s.pre = { ...(s.pre || {}) }; if (!to || to === orig) delete s.pre[orig]; else s.pre[orig] = to; if (!Object.keys(s.pre).length) delete s.pre; }); }
 function mutate(fn) { const s = sessionDoc(S.day); fn(s); saveDay(S.day); render(); }
 function toast(t) { const el = $("#toast"); el.textContent = t; el.hidden = false; clearTimeout(toast._t); toast._t = setTimeout(() => el.hidden = true, 2600); }
 
@@ -2993,18 +3021,21 @@ document.addEventListener("click", async ev => {
     case "bodysel": S.bodySel = S.bodySel === b.dataset.k ? null : b.dataset.k; render(); break;
     case "prevday": S.day = addDays(S.day, -1); render(); break;
     case "nextday": S.day = addDays(S.day, 1); render(); break;
-    case "swap": closeSheet(true); swapEntry(i, b.dataset.id); toast(`Swapped to ${exById(b.dataset.id).name}`); break;
-    case "swapsheet": openSwap(i); break;
+    case "swap": closeSheet(true);
+      if (b.dataset.pre) setPre(b.dataset.orig, b.dataset.id); else swapEntry(i, b.dataset.id);
+      toast(`Swapped to ${exById(b.dataset.id).name}${b.dataset.pre ? " for today" : ""}`); break;
+    case "swapsheet": openSwap(b.dataset.pre ? { pre: b.dataset.pre, orig: b.dataset.orig, rid: b.dataset.rid } : { i }); break;
     case "swapalways": {
-      const from = E().ex, to = b.dataset.id, sub = subOf(from);
-      closeSheet(true); swapEntry(i, to);
+      const pre = b.dataset.pre, from = pre ? b.dataset.orig : E().ex, to = b.dataset.id, sub = subOf(from);
+      closeSheet(true); if (pre) setPre(from, null); else swapEntry(i, to);
       if (sub && autoMode()) { await setPrefs(p => reorder(p, subOf(to) || sub, to)); toast(`Swapped. Balanced sessions will pick ${exById(to).name} first`); }
-      else { const n = await replaceInRoutines(from, to, S.sessions[S.day]?.routine); toast(`Swapped${n ? `, and in ${n === 1 ? "the routine" : n + " routines"} too` : ""}`); }
+      else { const n = await replaceInRoutines(from, to, pre ? b.dataset.rid : S.sessions[S.day]?.routine); toast(`Swapped${n ? `, and in ${n === 1 ? "the routine" : n + " routines"} too` : ""}`); }
       break;
     }
     case "skipex": {   // data-k: cycle | never | "" (take it off the list); data-i: also swap that entry on Today
       const key = b.dataset.id, k = b.dataset.k, name = skipName(key);
       await setPrefs(p => { if (k) p.skip[key] = { ...(p.skip[key] || {}), k, since: S.day }; else delete p.skip[key]; });
+      if (b.dataset.pre) { closeSheet(true); if (S.sessions[S.day]?.pre?.[b.dataset.orig] === key) setPre(b.dataset.orig, null); }   // the plan rebuilds without it
       if (b.dataset.i) { closeSheet(true); const to = nextInMove(E().ex, S.day) || similarEx(E().ex, S.day)[0]?.id; if (to) swapEntry(i, to); }
       toast(!k ? `${name} is back in` : k === "never" ? `${name} won't be suggested again` : `${name} is out until your next deload`); break;
     }
@@ -3053,7 +3084,8 @@ document.addEventListener("click", async ev => {
     case "routine": {
       const r = b.dataset.id === "auto" ? buildSession(S.day) : S.routines[b.dataset.id], plan = b.dataset.raw ? { items: r.items, changes: [] } : adaptRoutine(r, S.day), dl = plan.deload;
       const trim = dl ? null : trimReason(S.day); closeSheet();
-      mutate(s => { if (trim) s.trim = trim; if (dl) { s.deload = true; s.trim = "deload week"; } for (const it of plan.items) { const e = newEntry(it.ex, S.day); const p = progression(it.ex, S.day);
+      const items = applyPre(plan.items, S.day), slots = slotsAfter(r.slots, items);
+      mutate(s => { delete s.pre; if (trim) s.trim = trim; if (dl) { s.deload = true; s.trim = "deload week"; } for (const it of items) { const e = newEntry(it.ex, S.day); const p = progression(it.ex, S.day);
         const top = p?.last ? Math.max(...p.last.e.sets.map(x => x.w || 0)) : (it.w || 0);
         const w = dl && exById(it.ex).kind === "weight" ? deloadWeight(top, exById(it.ex).inc) : top;
         // carry last session's reps forward inside the range; start new lifts at the bottom (and always in a deload)
@@ -3064,7 +3096,7 @@ document.addEventListener("click", async ev => {
           : Array.from({ length: trim ? Math.max(1, it.sets - 1) : it.sets }, () => ({ w, r, done: false }));
         if (dp) e.dl = { n: dp.n, w: dp.w, r: dp.r };
         if (it.rHi) { e.rLo = it.r; e.rHi = it.rHi; }
-        s.entries.push(e); } s.routine = r.id; if (r.slots) s.slots = r.slots; s.finished = false; });
+        s.entries.push(e); } s.routine = r.id; if (slots) s.slots = slots; s.finished = false; });
       toast(`Started ${r.name}${dl ? " as a deload" : plan.changes.length ? ` with ${plan.changes.length} change${plan.changes.length > 1 ? "s" : ""} for today` : ""}${trim ? `, one set lighter (${trim})` : ""}`); break;
     }
     case "deload-start": {

@@ -385,6 +385,65 @@ function run() {
     ok(forecast(today, 4).length === 4);
   }));
 
+  // Exercise preferences: your order, three levels of skipping, block and stall offers
+  const withPrefs = (prefs, extra = {}) => ({ ...dbGear, week: { lifts: 3, cardio: 3, mode: "auto" }, prefs, ...extra });
+  const pressOf = b => b.items.find(x => ["hpress", "vpress"].includes(subOf(x.ex)));
+  test("prefs: your order wins over how often you've done it", () => scene({
+    sessions: session(ago(3), entry("db_ohp", 30, 8)), settings: withPrefs({ order: { vpress: ["pike_pushup", "db_ohp"] } }) }, () => {
+    eq(ranked("vpress")[0], "pike_pushup"); eq(ranked("vpress")[1], "db_ohp");
+  }));
+  test("prefs: without an order, the most used comes first", () => scene({ sessions: session(ago(3), entry("db_ohp", 30, 8)), settings: withPrefs({}) }, () => eq(ranked("vpress")[0], "db_ohp")));
+  test("prefs: reorder saves the whole list and moves one place", () => scene({ settings: withPrefs({}) }, () => {
+    const p = { order: {} }; reorder(p, "vpress", "pike_pushup"); eq(p.order.vpress[0], "pike_pushup");
+    reorder(p, "vpress", "pike_pushup", 1); eq(p.order.vpress[1], "pike_pushup"); eq(p.order.vpress.length, SLOT_SUBS.vpress[1].length);
+  }));
+  test("prefs: a skipped exercise isn't picked; the next in your order is", () => scene({
+    sessions: session(ago(10), entry("db_bench", 30, 8)), settings: withPrefs({ skip: { db_bench: { k: "cycle", since: ago(1) } } }) }, () => {
+    const b = buildSession(today), pr = pressOf(b); ok(pr, "a press"); ok(pr.ex !== "db_bench", "skipped one picked");
+  }));
+  test("prefs: skipping a whole movement leaves the slot to its partner, and says so", () => scene({ settings: withPrefs({ skip: { "move:vpress": { k: "never", since: ago(30) } } }) }, () => {
+    for (let i = 0; i < 3; i++) { const b = buildSession(today); eq(subOf(pressOf(b).ex), "hpress"); ok(b.why.some(w => w.includes("overhead pressing")), "why line"); }
+    ok(!buildSession(today).items.some(x => SLOT_SUBS.vpress[1].includes(x.ex)), "no overhead as accessory");
+  }));
+  test("prefs: never-list exercises aren't offered as swaps or suggestions", () => scene({ settings: withPrefs({ skip: { db_row: { k: "never", since: ago(5) } } }) }, () => {
+    ok(!similarEx("inv_row", today).some(e => e.id === "db_row")); ok(!coach(today).exSuggest.some(e => e.id === "db_row"));
+  }));
+  test("prefs: a routine's skipped item becomes your next choice in that movement", () => scene({
+    routines: { r: { id: "r", name: "R", items: [{ ex: "db_ohp", sets: 3, r: 8, rHi: 12, w: 30 }] } },
+    settings: withPrefs({ order: { vpress: ["db_ohp", "pike_pushup"] }, skip: { db_ohp: { k: "never", since: ago(5) } } }, { week: { lifts: 3 } }) }, () => {
+    const a = adaptRoutine(S.routines.r, today); eq(a.items[0].ex, "pike_pushup"); ok(a.changes[0].includes("never list"), a.changes[0]); eq(a.items[0].w, 0);
+  }));
+  test("prefs: a this-cycle skip comes up for review after the next deload, not before", () => scene({ settings: withPrefs({}) }, () => {
+    const sk = { k: "cycle", since: ago(20) };
+    eq(cycleDue(sk, today), false);
+    S.settings.deloads = [{ start: ago(25), end: ago(19) }]; eq(cycleDue(sk, today), false, "deload before the skip");
+    S.settings.deloads.push({ start: ago(9), end: ago(3) }); eq(cycleDue(sk, today), true);
+    eq(cycleDue({ k: "never", since: ago(400) }, today), false, "never stays");
+    eq(cycleDue({ k: "cycle", since: ago(CYCLE_FALLBACK) }, today), true, "fallback");
+  }));
+  test("prefs: the coach asks about a due skip, with three answers", () => scene({
+    settings: withPrefs({ skip: { db_ohp: { k: "cycle", since: ago(20) } } }, { deloads: [{ start: ago(9), end: ago(3) }] }) }, () => {
+    const m = coach(today).msgs.find(x => x.t.includes("aside")); ok(m, "message"); ok(m.t.includes('data-act="unskip"') && m.t.includes('data-k="never"') && m.t.includes('data-k="cycle"'));
+  }));
+  test("prefs: new block offers other lifts for movements you've trained, once", () => {
+    const sessions = { ...session(ago(12), entry("db_ohp", 30, 8)), ...session(ago(20), entry("db_row", 40, 8)) };
+    const st = (block) => ({ sessions, settings: withPrefs({ block }, { deloads: [{ start: ago(9), end: ago(3) }] }) });
+    scene(st(null), () => { const rows = blockOffers(today); ok(rows.some(r => r.sub === "vpress" && r.cur === "db_ohp" && r.alts.length), JSON.stringify(rows)); ok(!rows.some(r => r.sub === "squat"), "untrained");
+      ok(coach(today).msgs.some(m => m.t.includes("New block"))); });
+    scene(st(ago(3)), () => ok(!coach(today).msgs.some(m => m.t.includes("New block")), "answered"));
+  });
+  test("prefs: a stalled lift offers your next choice", () => scene({
+    sessions: { ...session(ago(25), entry("pullup", 0, 8)), ...session(ago(22), entry("pullup", 0, 8)), ...session(ago(5), entry("pullup", 0, 8)), ...session(ago(1), entry("pullup", 0, 8)) },
+    settings: withPrefs({ order: { vpull: ["pullup", "chinup"] } }) }, () => {
+    const m = coach(today).msgs.find(x => x.t.includes("hasn't moved")); ok(m && m.t.includes('data-to="chinup"'), m?.t);
+  }));
+  test("prefs: a swap into another movement moves the session's turn with it", () => scene({
+    sessions: { [S.day]: { date: S.day, slots: ["squat", "vpress", "hpull"], entries: [{ id: "a", ex: "db_ohp", sets: [{ w: 30, r: 8, done: false }] }] } }, settings: withPrefs({}) }, () => {
+    const [r0, s0] = [render, saveDay]; render = saveDay = () => {};
+    try { swapEntry(0, "db_bench"); } finally { render = r0; saveDay = s0; }
+    eq(S.sessions[S.day].slots, ["squat", "hpress", "hpull"]); eq(S.sessions[S.day].entries[0].ex, "db_bench");
+  }));
+
   const failed = results.filter(r => !r.ok);
   document.title = failed.length ? `${failed.length} FAILED` : "all passed";
   document.getElementById("view").innerHTML = `<pre>${esc(results.map(r => `${r.ok ? "ok  " : "FAIL"} ${r.name}${r.msg ? `\n     ${r.msg}` : ""}`).join("\n"))}\n\n${results.length - failed.length} of ${results.length} passed</pre>`;

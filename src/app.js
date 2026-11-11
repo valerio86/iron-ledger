@@ -514,7 +514,7 @@ function exerciseAdvice(exId, day, ctx) {
   let alts = [];
   if (lvl > 0 && prim.length && !ctx.noAlts) {
     const sub = { ...ctx, noAlts: true };
-    alts = allEx().filter(e => e.id !== exId).map(e => {
+    alts = allEx().filter(e => e.id !== exId && !skipped(e.id)).map(e => {
       const ov = prim.reduce((a, m) => a + (e.muscles[m] || 0), 0);
       return { e, ov, adv: ov >= .75 ? exerciseAdvice(e.id, day, sub) : { lvl: 9 } };
     }).filter(x => x.adv.lvl < lvl && x.ov >= .75).sort((a, b) => a.adv.lvl - b.adv.lvl || b.ov - a.ov || (b.e.kind === "weight") - (a.e.kind === "weight")).slice(0, 3).map(x => x.e);
@@ -1284,6 +1284,15 @@ function adaptRoutine(r, day) {
   for (const it of r.items) {
     let ex = it.ex, sets = it.sets;
     // 1. Swap what you can't (or shouldn't) do today for the closest alternative
+    const sk = skipOf(ex);
+    if (sk) {
+      const taken = id => items.some(x => x.ex === id) || r.items.some(x => x.ex === id);
+      const altId = [nextInMove(ex, day, ctx), ...similarEx(ex, day, ctx).map(e => e.id)].find(id => id && !taken(id));
+      const why = sk.k === "never" ? "on your never list" : "skipped this cycle";
+      if (!altId) { changes.push(`Dropped <b>${esc(exById(ex).name)}</b> (${why}, no good swap)`); continue; }
+      changes.push(`<b>${esc(exById(ex).name)}</b> → <b>${esc(exById(altId).name)}</b> (${why})`);
+      ex = altId;
+    }
     const adv = exerciseAdvice(ex, day, ctx);
     if (adv.lvl >= 2) {
       const alt = adv.alts.find(a => canDo(a.id) && !items.some(x => x.ex === a.id) && !r.items.some(x => x.ex === a.id));
@@ -1329,8 +1338,8 @@ function adaptRoutine(r, day) {
     for (const m of gaps) {
       if (added >= 2 || total >= base + 6) break;
       const gap = need(m); if (gap < 2) continue;
-      const pick = allEx().filter(e => (e.muscles[m] || 0) >= 1 && canDo(e.id) && !items.some(x => x.ex === e.id) && exerciseAdvice(e.id, day, { ...ctx, noAlts: true }).lvl === 0)
-        .sort((a, b) => (used[b.id] || 0) - (used[a.id] || 0) || Object.keys(a.muscles).length - Object.keys(b.muscles).length)[0];
+      const pick = allEx().filter(e => (e.muscles[m] || 0) >= 1 && canDo(e.id) && !skipped(e.id) && !items.some(x => x.ex === e.id) && exerciseAdvice(e.id, day, { ...ctx, noAlts: true }).lvl === 0)
+        .sort((a, b) => isFav(b.id) - isFav(a.id) || (used[b.id] || 0) - (used[a.id] || 0) || Object.keys(a.muscles).length - Object.keys(b.muscles).length)[0];
       if (!pick) continue;
       const n = Math.min(3, Math.ceil(gap));
       items.push({ ex: pick.id, sets: n, r: pick.kind === "time" ? 30 : pick.kind === "bodyweight" ? 10 : 12, rHi: pick.kind === "time" ? 45 : 15, w: 0 });
@@ -1370,6 +1379,77 @@ const SESSION_SLOTS = [["squat", "hinge"], ["hpress", "vpress"], ["hpull", "vpul
 const AUTO = { id: "auto", name: "Balanced session", items: [], auto: true };
 const SMALL_MUSCLES = new Set(["calves", "sideDelt", "rearDelt", "forearms", "abs", "obliques"]);
 function autoMode() { return S.settings.week?.mode === "auto"; }
+
+/* ---------- Exercise preferences (settings.prefs) ----------
+   order: { [movement]: [exId…] }  your ranking inside each movement; balanced sessions take the first one you can do.
+                                   Unranked exercises follow, most used first.
+   skip:  { [exId | "move:<movement>"]: { k, since, note? } }  three levels of "not this one":
+            (not today = a one-off swap on Today, nothing stored)
+            cycle: left out of suggestions until the next deload has passed (or 8 weeks without one); then the coach asks
+            never: left out of everything the app suggests, for good. You can still add it yourself.
+   fav:   [exId…]  accessories you like: picked first when they cover a gap
+   block: end day of the deload whose "new block" offer you've answered */
+const CYCLE_FALLBACK = 56;
+function prefs() { const p = S.settings.prefs || {}; return { order: p.order || {}, skip: p.skip || {}, fav: p.fav || [], block: p.block || null }; }
+async function setPrefs(fn) {
+  const p = JSON.parse(JSON.stringify(prefs())); fn(p);
+  S.settings = { ...S.settings, prefs: p }; render(); await saveDoc("settings/main", S.settings);
+}
+function subOf(exId) { return Object.keys(SLOT_SUBS).find(k => SLOT_SUBS[k][1].includes(exId)) || null; }
+// The skip that applies: the exercise's own, else its movement's
+function skipOf(exId) { const sk = prefs().skip, s = subOf(exId); return sk[exId] || (s && sk["move:" + s]) || null; }
+function skipped(exId) { return !!skipOf(exId); }
+function isFav(exId) { return prefs().fav.includes(exId); }
+function skipName(key) { return key.startsWith("move:") ? MOVE_NAMES[key.slice(5)] : exById(key).name; }
+const MOVE_NAMES = { squat: "Squatting", hinge: "Hinging", hpress: "Horizontal pressing", vpress: "Overhead pressing", hpull: "Rowing", vpull: "Pull-ups" };
+// A "this cycle" skip is up for review once a deload that started after it has ended, or after 8 weeks without one
+function cycleDue(sk, day) {
+  if (sk.k !== "cycle") return false;
+  return (S.settings.deloads || []).some(d => d.start > sk.since && d.end < day) || daysBetween(sk.since, day) >= CYCLE_FALLBACK;
+}
+// The deload that just ended, if this day is in the week after it
+function newBlock(day) {
+  return (S.settings.deloads || []).filter(d => d.end < day && daysBetween(d.end, day) <= 7).sort((a, b) => a.end < b.end ? 1 : -1)[0] || null;
+}
+// For each movement you've trained lately: your current pick and up to two others you could switch to
+function blockOffers(day) {
+  const ctx = adviceCtx(day), out = [];
+  for (const sub of Object.keys(SLOT_SUBS)) {
+    const opts = ranked(sub).filter(id => !skipped(id) && canDo(id) && exerciseAdvice(id, day, { ...ctx, noAlts: true }).lvl < 2);
+    const cur = opts[0];
+    if (!cur || !historyFor(cur, day).some(r => r.day > addDays(day, -42))) continue;
+    if (opts.length > 1) out.push({ sub, cur, alts: opts.slice(1, 3) });
+  }
+  return out;
+}
+function usedCounts(beforeDay) { const used = {}; for (const x of allDoneSets(x => !beforeDay || x.day < beforeDay)) used[x.ex.id] = (used[x.ex.id] || 0) + 1; return used; }
+// A movement's exercises in your order (unranked: most used, then the built-in order)
+function ranked(sub, used = usedCounts(), ord = prefs().order[sub] || []) {
+  const r = id => { const i = ord.indexOf(id); return i < 0 ? 1e3 : i; };
+  return [...SLOT_SUBS[sub][1]].sort((a, b) => r(a) - r(b) || (used[b] || 0) - (used[a] || 0));
+}
+// Put exId first in its movement, or move it one place (d = -1 up, +1 down). The current order is saved in full.
+function reorder(p, sub, exId, d) {
+  const list = ranked(sub, undefined, p.order[sub]); p.order[sub] = list;
+  const i = list.indexOf(exId); if (i < 0) return;
+  const t = d == null ? 0 : Math.max(0, Math.min(list.length - 1, i + d));
+  list.splice(i, 1); list.splice(t, 0, exId);
+}
+// Your next choice in a movement after exId: one you can do, haven't skipped, and isn't off-limits today
+function nextInMove(exId, day, ctx = adviceCtx(day)) {
+  const sub = subOf(exId); if (!sub) return null;
+  return ranked(sub).find(id => id !== exId && !skipped(id) && canDo(id) && exerciseAdvice(id, day, { ...ctx, noAlts: true }).lvl < 2) || null;
+}
+// Exercises that work the same main muscles, best fit first (no skipped ones)
+function similarEx(exId, day, ctx = adviceCtx(day), n = 4) {
+  const prim = Object.entries(exById(exId).muscles).filter(([, w]) => w >= .75).map(([m]) => m);
+  if (!prim.length) return [];
+  const sub = { ...ctx, noAlts: true };
+  return allEx().filter(e => e.id !== exId && !skipped(e.id) && canDo(e.id)).map(e => ({ e, ov: prim.reduce((a, m) => a + (e.muscles[m] || 0), 0) }))
+    .filter(x => x.ov >= .75).map(x => ({ ...x, lvl: exerciseAdvice(x.e.id, day, sub).lvl })).filter(x => x.lvl < 2)
+    .sort((a, b) => a.lvl - b.lvl || b.ov - a.ov || isFav(b.e.id) - isFav(a.e.id)).slice(0, n).map(x => x.e);
+}
+
 function buildSession(day) {
   const ctx = adviceCtx(day), why = [], items = [], picked = [];
   const used = {}; for (const x of allDoneSets(x => x.day < day)) used[x.ex.id] = (used[x.ex.id] || 0) + 1;
@@ -1393,7 +1473,7 @@ function buildSession(day) {
   };
   const lagK = new Set(strengthLevels(day).groups.filter(g => g.lag).map(g => g.k));
   const ok = (id, maxLvl) => canDo(id) && exerciseAdvice(id, day, { ...ctx, noAlts: true }).lvl <= maxLvl;
-  const pickIn = (sub, maxLvl) => SLOT_SUBS[sub][1].filter(id => ok(id, maxLvl)).sort((a, b) => (used[b] || 0) - (used[a] || 0))[0];
+  const pickIn = (sub, maxLvl) => ranked(sub, used).find(id => !skipped(id) && ok(id, maxLvl));
   const tired = id => Object.entries(exById(id).muscles).some(([m, w]) => w >= 1 && readiness(ctx.fat[m]) === "fat");
   for (const pair of SESSION_SLOTS) {
     const opts = pair.map(sub => {
@@ -1408,6 +1488,9 @@ function buildSession(day) {
     items.push({ ex: o.id, ...numbers(o.id, true), w: 0 });
     why.push(`${SLOT_SUBS[o.sub][0].toLowerCase()}: ${o.last ? `last done ${agoText(o.last, day)}` : "not done recently"}${lagK.has(SLOT_SUBS[o.sub][2]) ? ", and it's behind your other movements" : ""}`);
   }
+  const sk = prefs().skip;
+  for (const sub of Object.keys(SLOT_SUBS)) if (sk["move:" + sub])
+    why.push(`${MOVE_NAMES[sub].toLowerCase()} is on your ${sk["move:" + sub].k === "never" ? "never" : "skip-this-cycle"} list; accessories cover its muscles when they fall short`);
   // Accessories: fresh muscles furthest below their weekly range, spread over the lift days left this week
   const proj = { ...ctx.wk };
   for (const it of items) for (const [m, w] of Object.entries(exById(it.ex).muscles)) if (proj[m] != null) proj[m] += w * it.sets;
@@ -1420,8 +1503,8 @@ function buildSession(day) {
   for (const m of gaps) {
     if (items.length - picked.length >= maxAcc) break;
     if (need(m) < 2) continue;   // an earlier accessory may have covered it
-    const pick = allEx().filter(e => (e.muscles[m] || 0) >= 1 && !items.some(x => x.ex === e.id) && !mainIds.has(e.id) && ok(e.id, 0))
-      .sort((a, b) => Object.keys(a.muscles).length - Object.keys(b.muscles).length || (used[b.id] || 0) - (used[a.id] || 0))[0];
+    const pick = allEx().filter(e => (e.muscles[m] || 0) >= 1 && !items.some(x => x.ex === e.id) && !mainIds.has(e.id) && !skipped(e.id) && ok(e.id, 0))
+      .sort((a, b) => isFav(b.id) - isFav(a.id) || Object.keys(a.muscles).length - Object.keys(b.muscles).length || (used[b.id] || 0) - (used[a.id] || 0))[0];
     if (!pick) continue;
     const n = numbers(pick.id, false), sets = Math.max(2, Math.min(3, Math.ceil(need(m) / left)));
     items.push({ ex: pick.id, ...n, sets, w: 0 });
@@ -1493,6 +1576,20 @@ function coach(day) {
     ${isToday ? `<div class="swaps"><button class="chipbtn" data-act="deload-end">End it early</button></div>` : ""}` });
   else if (due) msgs.push({ lvl: "warn", ic: "↓", t: `${srcBtn("deload")} <b>Time for a deload week.</b> ${due.early ? `${due.weeks} weeks of full training, and ${due.signs.join(" and ")}.` : `${due.weeks} straight weeks of full training.`} For the next 7 days: the same lifts with half the sets at about 90% weight, easy cardio only. You'll come back stronger.
     <div class="swaps"><button class="chipbtn primary" data-act="deload-start">Start deload week</button><button class="chipbtn" data-act="deload-snooze">Not yet</button></div>` });
+
+  // A new block after a deload: a chance to change a main lift (balanced sessions), and to bring back what you set aside
+  if (isToday && !dl) {
+    const nb = newBlock(day);
+    if (nb && autoMode() && prefs().block !== nb.end) {
+      const rows = blockOffers(day);
+      if (rows.length) msgs.push({ lvl: "info", ic: "↻", t: `<b>New block.</b> A good time to change a main lift for variety; whatever you pick, you keep for the block so progress can build.
+        <div class="blockrows">${rows.map(o => `<div><span class="small"><b>${SLOT_SUBS[o.sub][0]}:</b> ${esc(exById(o.cur).name)}</span> ${o.alts.map(a => `<button class="chipbtn" data-act="prefer" data-sub="${o.sub}" data-id="${esc(a)}">Try ${esc(exById(a).name)}</button>`).join("")}</div>`).join("")}</div>
+        <div class="swaps"><button class="chipbtn primary" data-act="blockdone" data-v="${nb.end}">Done</button></div>` });
+    }
+    for (const [key, sk] of Object.entries(prefs().skip)) if (cycleDue(sk, day))
+      msgs.push({ lvl: "info", ic: "↻", t: `You set <b>${esc(skipName(key))}</b> aside on ${fmtDay(sk.since, { month: "short", day: "numeric" })}. Bring it back for this block?
+        <div class="swaps"><button class="chipbtn primary" data-act="unskip" data-id="${esc(key)}">Bring it back</button><button class="chipbtn" data-act="skipex" data-id="${esc(key)}" data-k="cycle">Not yet</button><button class="chipbtn" data-act="skipex" data-id="${esc(key)}" data-k="never">Never</button></div>` });
+  }
 
   // Recovery trending the wrong way → cut cardio first, not lifting (plan rule)
   const hk = Object.keys(S.health).filter(k => k <= day).sort();
@@ -1600,7 +1697,12 @@ function coach(day) {
   if (trained >= 6) msgs.push({ lvl: "warn", t: `${trained} training days out of the last 7. Plan a full rest day.` });
 
   // 8. Stalls
-  if (!dl) for (const ex of stalledLifts(day)) msgs.push({ lvl: "info", t: `<b>${esc(ex.name)}</b> hasn't moved in 3 weeks. Try a lighter week, or change the rep range.` });
+  if (!dl) for (const ex of stalledLifts(day)) {
+    // Changing the variation is the other standard fix: your next choice in the movement, else the closest exercise
+    const to = isToday && (nextInMove(ex.id, day) || similarEx(ex.id, day)[0]?.id);
+    msgs.push({ lvl: "info", t: `<b>${esc(ex.name)}</b> hasn't moved in 3 weeks. Try a lighter week, change the rep range, or swap it for a while.${to ? `
+      <div class="swaps"><button class="chipbtn" data-act="stallswap" data-id="${esc(ex.id)}" data-to="${esc(to)}">Swap for ${esc(exById(to).name)}</button></div>` : ""}` });
+  }
 
   // 8b. A movement a level behind the rest (Start already moves it to the front)
   if (histDays >= 21 && !dl && isToday) {
@@ -1633,8 +1735,8 @@ function coach(day) {
   for (const x of allDoneSets()) usedCount[x.ex.id] = (usedCount[x.ex.id] || 0) + 1;
   const exSuggest = [];
   for (const g of gaps) {
-    const cands = allEx().filter(e => canDo(e.id) && (e.muscles[g.m] || 0) >= 1 &&Object.entries(e.muscles).every(([m, w]) => w < .75 || readiness(fatNow[m]) !== "fat"));
-    cands.sort((a, b) => (usedCount[b.id] || 0) - (usedCount[a.id] || 0));
+    const cands = allEx().filter(e => canDo(e.id) && !skipped(e.id) && (e.muscles[g.m] || 0) >= 1 && Object.entries(e.muscles).every(([m, w]) => w < .75 || readiness(fatNow[m]) !== "fat"));
+    cands.sort((a, b) => isFav(b.id) - isFav(a.id) || (usedCount[b.id] || 0) - (usedCount[a.id] || 0));
     const pick = cands.find(c => !exSuggest.includes(c));
     if (pick) exSuggest.push(pick);
   }
@@ -1995,7 +2097,7 @@ function renderEntry(e, i, day, fatPre, actx) {
   return `
     <div class="entry ${allDone ? "complete" : ""}">
       <div class="eh"><div><div class="nm">${esc(ex.name)} ${helpBtn(e.ex, ex.name)}</div><div class="sub">${prim}${e.rHi ? ` · ${e.rLo}–${e.rHi}${ex.kind === "time" ? "s" : " reps"}` : ""}</div></div>
-        <button class="x" data-act="rm" data-i="${i}" aria-label="Remove ${esc(ex.name)}">×</button></div>
+        <div class="rowbtns">${e.sets.some(s => s.done) ? "" : `<button class="linkbtn" data-act="swapsheet" data-i="${i}" aria-label="Swap ${esc(ex.name)}">⇄ Swap</button>`}<button class="x" data-act="rm" data-i="${i}" aria-label="Remove ${esc(ex.name)}">×</button></div></div>
       ${adv.lvl ? `<div class="hint ${adv.lvl >= 2 ? "bad" : "warn"}"><b>${adv.lvl >= 2 ? "Not the best right now" : "Careful"}:</b> ${esc(adv.reasons.join("; "))}.${adv.alts.length ? `<div class="swaps">Swap for: ${adv.alts.map(a => `<button class="chipbtn" data-act="swap" data-i="${i}" data-id="${esc(a.id)}">${esc(a.name)}</button>`).join("")}</div>` : ""}</div>` : ""}
       ${!prog && ex.kind === "weight" && !e.sets.some(s => s.done || s.w) ? `<div class="hint info">First time: pick a weight you could lift 2–3 more reps than the target with good form. Go lighter if unsure; the coach takes it from there.</div>` : ""}
       ${dlHint}
@@ -2484,6 +2586,7 @@ function renderPlan() {
     </section>
     <p class="small muted"><a href="privacy.html" style="color:var(--accent)">Privacy</a> · <a href="https://github.com/valerio86/iron-ledger" style="color:var(--accent)">About</a> · Not medical advice.</p>`;
   return planSeg() + (S.planView === "exercises" ? `
+    ${renderPicks()}
     ${renderExMap()}
     <section class="block">
       <h2>Your exercises</h2>
@@ -2551,6 +2654,52 @@ function renderPlan() {
 `);
 }
 
+/* ---------- Exercise preferences: controls ---------- */
+function prefMark(id) {
+  const sk = skipOf(id);
+  return sk ? `<i class="pm ${sk.k}" title="${sk.k === "never" ? "Never suggested" : "Skipped this cycle"}">${sk.k === "never" ? "⊘" : "⏸"}</i>` : isFav(id) ? `<i class="pm fav" title="Favourite">♥</i>` : "";
+}
+// Skip level as a 3-way toggle; key is an exercise id or "move:<movement>"
+function skipToggle(key) {
+  const k = prefs().skip[key]?.k || "";
+  return `<div class="unit-toggle" role="group" aria-label="Suggest ${esc(skipName(key))}">${[["", "Suggest"], ["cycle", "Skip cycle"], ["never", "Never"]].map(([v, n]) =>
+    `<button type="button" data-act="skipex" data-id="${esc(key)}" data-k="${v}" aria-pressed="${k === v}">${n}</button>`).join("")}</div>`;
+}
+function skipNote(key) {
+  const sk = prefs().skip[key];
+  return sk?.k === "never" ? `<input class="skipnote" data-skipnote="${esc(key)}" value="${esc(sk.note || "")}" placeholder="Why? e.g. doctor: no overhead loading" aria-label="Why ${esc(skipName(key))} is on your never list">` : "";
+}
+function prefControls(id) {
+  const sub = subOf(id), mv = sub && prefs().skip["move:" + sub];
+  if (mv) return `<div class="small muted">Part of ${MOVE_NAMES[sub].toLowerCase()}, which is ${mv.k === "never" ? "on your never list" : "skipped this cycle"}. Change it under Your picks.</div>`;
+  const rank = sub ? ranked(sub).indexOf(id) + 1 : 0;
+  return `<div class="prefrow">${skipToggle(id)}${sub ? `<span class="small muted">#${rank} for ${SLOT_SUBS[sub][0].toLowerCase()}</span>`
+    : `<button class="chipbtn ${isFav(id) ? "primary" : ""}" data-act="fav" data-id="${esc(id)}" aria-pressed="${isFav(id)}">♥ Favourite</button>`}</div>${skipNote(id)}`;
+}
+// Plan → Exercises: your order inside each main movement, and everything you've set aside
+function renderPicks() {
+  const P = prefs(), used = usedCounts();
+  const moves = Object.keys(SLOT_SUBS).map(sub => {
+    const list = ranked(sub, used), msk = P.skip["move:" + sub];
+    const top = list.find(id => !skipped(id) && canDo(id));
+    const rows = list.map((id, k) => `<div class="pickrow ${skipped(id) || !canDo(id) ? "off" : ""}"><span class="num muted">${k + 1}</span><span class="nm">${esc(exById(id).name)}${prefMark(id)}${!canDo(id) ? ` <span class="small muted">needs gear</span>` : ""}</span>
+      <span class="rowbtns"><button class="iconbtn sm" data-act="rank" data-sub="${sub}" data-id="${esc(id)}" data-d="-1" aria-label="Move ${esc(exById(id).name)} up" ${k ? "" : "disabled"}>↑</button><button class="iconbtn sm" data-act="rank" data-sub="${sub}" data-id="${esc(id)}" data-d="1" aria-label="Move ${esc(exById(id).name)} down" ${k < list.length - 1 ? "" : "disabled"}>↓</button></span></div>`).join("");
+    return fold("pick-" + sub, `<b>${SLOT_SUBS[sub][0]}</b> <span class="muted">· ${msk ? (msk.k === "never" ? "never" : "skipped this cycle") : top ? esc(exById(top).name) : "nothing you can do"}</span>`,
+      `<div class="picks">${rows}<div class="prefrow"><span class="small muted">The whole movement:</span>${skipToggle("move:" + sub)}</div>${skipNote("move:" + sub)}</div>`);
+  }).join("");
+  const sk = Object.entries(P.skip).sort((a, b) => (a[1].k === "never") - (b[1].k === "never") || skipName(a[0]).localeCompare(skipName(b[0])));
+  return `
+    <section class="block">
+      <h2>Your picks</h2>
+      <p class="small muted" style="margin:0">${autoMode() ? "Balanced sessions" : "Balanced sessions (Plan → Your week)"} take the first exercise in each movement that your gear and joints allow. Skipped ones are never suggested by the app, in either mode.</p>
+      ${moves}
+    </section>
+    ${sk.length ? `<section class="block">
+      <h2>Set aside</h2>
+      <div class="list">${sk.map(([key, x]) => `<div class="row"><div class="l"><b>${esc(skipName(key))}</b><div class="small muted">${x.k === "never" ? "Never" : "This cycle"} · since ${fmtDay(x.since, { month: "short", day: "numeric" })}${x.k === "cycle" ? (cycleDue(x, dayKey(new Date())) ? ". Up for review: the coach is asking on Today." : ". The coach asks after your next deload.") : ""}</div>${x.k === "never" ? skipNote(key) : ""}</div><button class="linkbtn" data-act="unskip" data-id="${esc(key)}">Bring back</button></div>`).join("")}</div>
+    </section>` : ""}`;
+}
+
 /* ---------- Exercise ↔ muscle map (bipartite) ---------- */
 // Tap an exercise → its muscles light up; tap a muscle → the exercise list narrows to everything that trains it
 function renderExMap() {
@@ -2559,7 +2708,7 @@ function renderExMap() {
   const all = allEx(), selEx = sel?.type === "ex" ? exById(sel.id) : null, selM = sel?.type === "m" ? sel.id : null;
   const exNode = e => {
     const on = selEx?.id === e.id, lit = selM && e.muscles[selM] >= .75;
-    return `<div class="exn" data-node-ex="${esc(e.id)}"><button class="node ${on ? "on" : lit ? "lit" : ""} ${selEx && !on ? "dim" : ""}" data-act="bpex" data-id="${esc(e.id)}" title="${esc(e.name)}"><span>${esc(e.name)}</span>${used[e.id] ? `<i class="used" title="You've logged this"></i>` : ""}</button>${helpBtn(e.id, e.name)}</div>`;
+    return `<div class="exn" data-node-ex="${esc(e.id)}"><button class="node ${on ? "on" : lit ? "lit" : ""} ${selEx && !on ? "dim" : ""} ${skipped(e.id) ? "skipped" : ""}" data-act="bpex" data-id="${esc(e.id)}" title="${esc(e.name)}"><span>${esc(e.name)}</span>${prefMark(e.id)}${used[e.id] ? `<i class="used" title="You've logged this"></i>` : ""}</button>${helpBtn(e.id, e.name)}</div>`;
   };
   let exCol;
   if (selM) exCol = all.filter(e => e.muscles[selM]).sort((a, b) => b.muscles[selM] - a.muscles[selM] || a.name.localeCompare(b.name)).map(exNode).join("");
@@ -2575,6 +2724,7 @@ function renderExMap() {
     detail = `<div class="bpd"><div class="eh"><b>${esc(selEx.name)}</b>${helpBtn(selEx.id, selEx.name)}<button class="x" data-act="bpclear" aria-label="Clear selection">×</button></div>
       <div class="suggest">${chips}</div>
       <div class="small muted">${PATTERN_NAMES[selEx.pattern] || ""} · ${used[selEx.id] ? `you've logged ${used[selEx.id]} sets` : "not logged yet"}</div>
+      ${prefControls(selEx.id)}
       <div><button class="chipbtn" data-act="add" data-id="${esc(selEx.id)}">+ Add to ${S.day === today ? "today" : fmtDay(S.day)}</button></div></div>`;
   } else if (selM) {
     const M = MUSCLES[selM], wk = setsPerMuscle(addDays(today, -6), today)[selM];
@@ -2625,6 +2775,8 @@ function openAdd(q = "") {
   const tag = e => {
     const a = advs[e.id];
     if (!canDo(e.id)) return `<span class="pill neutral">Needs gear</span>`;
+    const sk = skipOf(e.id);
+    if (sk) return `<span class="pill neutral">${sk.k === "never" ? "Never list" : "Skipped"}</span>`;
     if (S.addFor) return "";
     if (a.lvl >= 2) return `<span class="pill bad">Not now</span>`;
     if (a.lvl === 1) return `<span class="pill warn">Caution</span>`;
@@ -2640,6 +2792,35 @@ function openAdd(q = "") {
   </div></div>`;
   const inp = $("#exsearch"); inp.focus(); inp.setSelectionRange(q.length, q.length);
   inp.oninput = () => openAdd(inp.value);
+}
+// Swap one exercise on Today: just for today, or from now on (it moves to the top of its movement); or stop suggesting it
+function openSwap(i) {
+  const e = S.sessions[S.day]?.entries?.[i]; if (!e) return;
+  const ex = exById(e.ex), sub = subOf(e.ex), ctx = adviceCtx(S.day), actx = { ...ctx, noAlts: true };
+  const same = sub ? ranked(sub).filter(id => id !== e.ex && canDo(id)) : [];
+  const sim = similarEx(e.ex, S.day, ctx, 5).map(x => x.id).filter(id => !same.includes(id));
+  const routine = S.routines[S.sessions[S.day]?.routine];
+  // "From now on": balanced sessions follow your order; a routine gets the exercise replaced in it
+  const always = sub && autoMode() ? "Balanced sessions will pick it first" : routine?.items.some(x => x.ex === e.ex) ? `Replaces it in ${routine.name}` : null;
+  // In balanced mode "from now on" reorders the movement, so it only makes sense inside the same movement
+  const row = id => { const a = exerciseAdvice(id, S.day, actx), sk = skipOf(id), keep = always && !sk && (!autoMode() || subOf(id) === sub);
+    return `<div class="swaprow"><div class="l"><div>${esc(exById(id).name)} ${helpBtn(id, exById(id).name)}</div>${sk ? `<div class="small muted">${sk.k === "never" ? "On your never list" : "Skipped this cycle"}</div>` : a.lvl ? `<div class="small" style="color:var(--${a.lvl >= 2 ? "bad" : "warn"})">${esc(a.reasons[0])}</div>` : ""}</div>
+      <div class="rowbtns"><button class="chipbtn" data-act="swap" data-i="${i}" data-id="${esc(id)}">Today</button>${keep ? `<button class="chipbtn" data-act="swapalways" data-i="${i}" data-id="${esc(id)}">From now on</button>` : ""}</div></div>`; };
+  const sk = skipOf(e.ex);
+  $("#sheet").innerHTML = `<div class="sheet-bg" data-act="closesheet"><div class="sheet" role="dialog" aria-label="Swap ${esc(ex.name)}">
+    <div class="sh"><div style="display:flex;justify-content:space-between;align-items:center"><h2>Swap ${esc(ex.name)}</h2><button class="x iconbtn" data-act="closesheet" aria-label="Close">×</button></div>
+    <p class="small muted" style="margin:4px 0 0"><b>Today</b> is a one-off: next time the plan is back to normal.${always ? ` <b>From now on:</b> ${esc(always)}.` : ""}</p></div>
+    <div class="sb">
+      ${same.length ? `<div class="label grouphdr">${MOVE_NAMES[sub]}, in your order</div>${same.map(row).join("")}` : ""}
+      ${sim.length ? `<div class="label grouphdr">Same muscles</div>${sim.map(row).join("")}` : ""}
+      ${!same.length && !sim.length ? `<p class="muted">Nothing similar you can do with your gear.</p>` : ""}
+      <div class="label grouphdr">Stop suggesting ${esc(ex.name)}</div>
+      ${sk ? `<p class="small muted" style="margin:0">Already ${sk.k === "never" ? "on your never list" : "skipped this cycle"}.</p>` : `<div class="swaps">
+        <button class="chipbtn" data-act="skipex" data-id="${esc(e.ex)}" data-k="cycle" data-i="${i}">For this cycle</button>
+        <button class="chipbtn" data-act="skipex" data-id="${esc(e.ex)}" data-k="never" data-i="${i}">Never</button></div>
+      <p class="small muted" style="margin:0">This cycle: the coach asks after your next deload whether to bring it back. Never: it isn't suggested again (you can still add it). Either way, today's is swapped for your next choice.</p>`}
+    </div>
+  </div></div>`;
 }
 function openRoutines() {
   const c = coach(S.day);
@@ -2774,6 +2955,29 @@ function newEntry(exId, day) {
   const r = ex.kind === "time" ? 30 : ex.kind === "bodyweight" ? 10 : 8;
   return { id: uid(), ex: exId, sets: Array.from({ length: 3 }, () => ({ w: 0, r, done: false })), effort: null };
 }
+// Replace an entry on this day with another exercise, keeping its rep range when the kind matches
+function swapEntry(i, id) {
+  mutate(s => {
+    const old = s.entries[i], ne = newEntry(id, S.day);
+    if (!historyFor(id, S.day).length) ne.sets = old.sets.map(x => ({ w: 0, r: exById(id).kind === "time" ? 30 : x.r, done: false }));
+    if (old.rHi && exById(id).kind === exById(old.ex).kind) { ne.rLo = old.rLo; ne.rHi = old.rHi; }
+    s.entries[i] = ne;
+    // A balanced session remembers which movements it trained: a swap into another movement moves that turn with it
+    const fs = subOf(old.ex), ts = subOf(id);
+    if (s.slots && fs && fs !== ts && s.slots.includes(fs)) s.slots = [...new Set(s.slots.map(x => x === fs ? ts : x).filter(Boolean))];
+  });
+}
+// Swap an exercise in your routines (just `only` when given). Returns how many changed.
+async function replaceInRoutines(from, to, only) {
+  let n = 0;
+  for (const r of Object.values(S.routines)) {
+    if ((only && r.id !== only) || !r.items.some(x => x.ex === from) || r.items.some(x => x.ex === to)) continue;
+    const same = exById(from).kind === exById(to).kind;
+    r.items = r.items.map(x => x.ex !== from ? x : same ? { ...x, ex: to, w: 0 } : { ex: to, sets: x.sets, r: exById(to).kind === "time" ? 30 : 8, rHi: exById(to).kind === "time" ? 45 : 12, w: 0 });
+    const { id, ...doc } = r; await saveDoc("routines/" + id, doc); n++;
+  }
+  render(); return n;
+}
 function mutate(fn) { const s = sessionDoc(S.day); fn(s); saveDay(S.day); render(); }
 function toast(t) { const el = $("#toast"); el.textContent = t; el.hidden = false; clearTimeout(toast._t); toast._t = setTimeout(() => el.hidden = true, 2600); }
 
@@ -2789,12 +2993,36 @@ document.addEventListener("click", async ev => {
     case "bodysel": S.bodySel = S.bodySel === b.dataset.k ? null : b.dataset.k; render(); break;
     case "prevday": S.day = addDays(S.day, -1); render(); break;
     case "nextday": S.day = addDays(S.day, 1); render(); break;
-    case "swap": mutate(() => {
-      const old = E(), ne = newEntry(b.dataset.id, S.day);
-      if (!historyFor(b.dataset.id, S.day).length) ne.sets = old.sets.map(s => ({ w: 0, r: exById(b.dataset.id).kind === "time" ? 30 : s.r, done: false }));
-      if (old.rHi && exById(b.dataset.id).kind === exById(old.ex).kind) { ne.rLo = old.rLo; ne.rHi = old.rHi; }
-      sessionDoc(S.day).entries[i] = ne;
-    }); toast(`Swapped to ${exById(b.dataset.id).name}`); break;
+    case "swap": closeSheet(true); swapEntry(i, b.dataset.id); toast(`Swapped to ${exById(b.dataset.id).name}`); break;
+    case "swapsheet": openSwap(i); break;
+    case "swapalways": {
+      const from = E().ex, to = b.dataset.id, sub = subOf(from);
+      closeSheet(true); swapEntry(i, to);
+      if (sub && autoMode()) { await setPrefs(p => reorder(p, subOf(to) || sub, to)); toast(`Swapped. Balanced sessions will pick ${exById(to).name} first`); }
+      else { const n = await replaceInRoutines(from, to, S.sessions[S.day]?.routine); toast(`Swapped${n ? `, and in ${n === 1 ? "the routine" : n + " routines"} too` : ""}`); }
+      break;
+    }
+    case "skipex": {   // data-k: cycle | never | "" (take it off the list); data-i: also swap that entry on Today
+      const key = b.dataset.id, k = b.dataset.k, name = skipName(key);
+      await setPrefs(p => { if (k) p.skip[key] = { ...(p.skip[key] || {}), k, since: S.day }; else delete p.skip[key]; });
+      if (b.dataset.i) { closeSheet(true); const to = nextInMove(E().ex, S.day) || similarEx(E().ex, S.day)[0]?.id; if (to) swapEntry(i, to); }
+      toast(!k ? `${name} is back in` : k === "never" ? `${name} won't be suggested again` : `${name} is out until your next deload`); break;
+    }
+    case "unskip": await setPrefs(p => { delete p.skip[b.dataset.id]; }); toast(`${skipName(b.dataset.id)} is back in`); break;
+    case "prefer": await setPrefs(p => reorder(p, b.dataset.sub, b.dataset.id)); toast(`${exById(b.dataset.id).name} is your pick for ${SLOT_SUBS[b.dataset.sub][0].toLowerCase()} now`); break;
+    case "rank": await setPrefs(p => reorder(p, b.dataset.sub, b.dataset.id, +b.dataset.d)); break;
+    case "fav": { const id = b.dataset.id; await setPrefs(p => { p.fav = p.fav.includes(id) ? p.fav.filter(x => x !== id) : [...p.fav, id]; }); break; }
+    case "blockdone": await setPrefs(p => { p.block = b.dataset.v; }); break;
+    case "stallswap": {
+      // Balanced: your next choice moves to the top of the movement. Routines: replaced in them. Otherwise: skipped this cycle.
+      const from = b.dataset.id, to = b.dataset.to, sub = subOf(from), name = exById(to).name;
+      const k = (S.sessions[S.day]?.entries || []).findIndex(e => e.ex === from && !e.sets.some(x => x.done));
+      if (k >= 0) swapEntry(k, to);
+      if (autoMode() && sub && subOf(to) === sub) { await setPrefs(p => reorder(p, sub, to)); toast(`${name} is your pick for ${SLOT_SUBS[sub][0].toLowerCase()} now`); }
+      else if (Object.values(S.routines).some(r => r.items.some(x => x.ex === from))) { const n = await replaceInRoutines(from, to); toast(`${name} replaces ${exById(from).name} in ${n === 1 ? "your routine" : n + " routines"}`); }
+      else { await setPrefs(p => { p.skip[from] = { k: "cycle", since: S.day }; }); toast(`${exById(from).name} is out until your next deload`); }
+      break;
+    }
     case "dismississue": mutate(s => { s.dismissed = [...new Set([...(s.dismissed || []), b.dataset.k])]; s.issues = (s.issues || []).filter(x => x.k !== b.dataset.k); }); break;
     case "resolveissue": mutate(s => { s.resolved = [...new Set([...(s.resolved || []), b.dataset.k])]; }); toast("Glad it's better"); break;
     case "gotoday": S.day = dayKey(new Date()); render(); window.scrollTo(0, 0); break;
@@ -2929,6 +3157,7 @@ document.addEventListener("change", ev => {
       for (let n = j + 1; n < sets.length; n++) if (!sets[n].done && sets[n][k] === old) sets[n][k] = sets[j][k]; });
   }
   if (t.id === "progex") { S.progEx = t.value; render(); }
+  if (t.dataset.skipnote) { const key = t.dataset.skipnote, v = t.value.trim(); setPrefs(p => { if (p.skip[key]) { if (v) p.skip[key].note = v; else delete p.skip[key].note; } }); }
   if (t.dataset.re && S.rEdit) { const it = S.rEdit.items[+t.dataset.k], v = parseInt(t.value) || 0;
     if (t.dataset.re === "r") it.r = Math.max(1, v); else if (v > 0) it.rHi = v; else delete it.rHi; }
   if (t.id?.startsWith("eqmax-")) {

@@ -430,3 +430,27 @@ details.fold.info > summary { font-size: 15px; display: inline-block; padding: 2
 .srcs { padding-left: 18px; }
 .srcs a { color: var(--accent); }
 .yearin { width: 76px; text-align: center; font: 15px var(--font-data); color: var(--fg); border: 1px solid var(--line); border-radius: 8px; padding: 7px 8px; background: var(--bg); }
+
+/* Exercise preferences: swap sheet, picks, skip marks */
+.swaprow { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.swaprow .l { min-width: 0; }
+.swaprow .l > div:first-child { font-weight: 600; }
+.swaprow .rowbtns { gap: 6px; }
+.swaprow .chipbtn { padding: 4px 10px; font-size: 12px; }
+.entry .eh .rowbtns { gap: 10px; }
+.prefrow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+.skipnote { display: block; width: 100%; box-sizing: border-box; margin-top: 6px; font-size: 13px; padding: 6px 8px; }
+.picks { display: grid; gap: 2px; margin: 6px 0 4px; }
+.pickrow { display: flex; align-items: center; gap: 8px; padding: 2px 0; }
+.pickrow .num { width: 18px; text-align: right; font-size: 13px; }
+.pickrow .nm { flex: 1; min-width: 0; font-size: 14px; }
+.pickrow.off .nm { color: var(--muted); }
+.pickrow .rowbtns { gap: 4px; }
+.pm { font-style: normal; font-size: 11px; margin-left: 4px; flex: none; }
+.pm.fav { color: var(--bad); }
+.pm.cycle, .pm.never { color: var(--muted); }
+.bp .node.skipped span { color: var(--muted); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--muted) 50%, transparent); }
+.blockrows { display: grid; gap: 6px; margin-top: 8px; }
+.blockrows > div { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.blockrows .chipbtn { padding: 3px 10px; font-size: 12px; background: var(--surface); }
+.row .l:has(.skipnote) { flex: 1; min-width: 0; }

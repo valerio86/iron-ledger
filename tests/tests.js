@@ -444,6 +444,25 @@ function run() {
     eq(S.sessions[S.day].slots, ["squat", "hpress", "hpull"]); eq(S.sessions[S.day].entries[0].ex, "db_bench");
   }));
 
+  test("plan swaps: the plan card lists the exercises, each with a swap", () => scene({ settings: withPrefs({}, { tipsSeen: ["plan", "swap"] }) }, () => {
+    S.day = today; const box = document.createElement("div"); box.innerHTML = renderToday();
+    const rows = box.querySelectorAll(".pxrow [data-act=swapsheet][data-pre]"); ok(rows.length >= 3, "rows " + rows.length);
+  }));
+  test("plan swaps: a one-off swap changes the plan and Start, and moves the movement's turn", () => scene({ settings: withPrefs({}) }, () => {
+    const p = buildSession(today), oh = p.items.find(x => subOf(x.ex) === "vpress") || p.items.find(x => subOf(x.ex) === "hpress");
+    const other = oh && subOf(oh.ex) === "vpress" ? "db_bench" : "db_ohp";
+    S.sessions[today] = { date: today, entries: [], pre: { [oh.ex]: other } };
+    const it = applyPre(p.items, today); eq(it.find(x => x.from === oh.ex).ex, other); eq(it.find(x => x.from === oh.ex).w, 0);
+    const sl = slotsAfter(p.slots, it); ok(sl.includes(subOf(other)) && !sl.includes(subOf(oh.ex)), JSON.stringify(sl));
+    eq(applyPre(p.items, ago(1)).some(x => x.from), false, "only that day");
+  }));
+  test("plan swaps: the swap sheet works on a planned exercise", () => scene({ settings: withPrefs({}) }, () => {
+    S.day = today; openSwap({ pre: "db_ohp", orig: "db_ohp", rid: "auto" });
+    const sh = document.getElementById("sheet"); ok(sh.querySelector('[data-act=swap][data-pre="db_ohp"]'), "today button"); ok(sh.querySelector('[data-act=skipex][data-k=never][data-pre]'), "never button");
+    sh.innerHTML = "";
+  }));
+  test("sources: the variety note has its references", () => { ok(SOURCES.variety.refs.length >= 2); ok(TIPS.swap); });
+
   const failed = results.filter(r => !r.ok);
   document.title = failed.length ? `${failed.length} FAILED` : "all passed";
   document.getElementById("view").innerHTML = `<pre>${esc(results.map(r => `${r.ok ? "ok  " : "FAIL"} ${r.name}${r.msg ? `\n     ${r.msg}` : ""}`).join("\n"))}\n\n${results.length - failed.length} of ${results.length} passed</pre>`;

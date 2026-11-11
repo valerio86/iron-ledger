@@ -454,3 +454,7 @@ details.fold.info > summary { font-size: 15px; display: inline-block; padding: 2
 .blockrows > div { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .blockrows .chipbtn { padding: 3px 10px; font-size: 12px; background: var(--surface); }
 .row .l:has(.skipnote) { flex: 1; min-width: 0; }
+.planex { display: grid; gap: 0; margin-top: 8px; border-top: 1px solid var(--line); }
+.pxrow { display: flex; align-items: center; gap: 10px; padding: 4px 0; border-bottom: 1px solid var(--line); }
+.pxrow .nm { flex: 1; min-width: 0; font-size: 14px; }
+.pxrow .linkbtn { padding: 4px 6px; font-size: 15px; }

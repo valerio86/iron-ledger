@@ -128,9 +128,9 @@ function run() {
   test("progress page renders with best set and per-hand labels", () => scene({
     sessions: session(ago(1), entry("db_curl", 20, 10)), settings: { unit: "lb" },
     health: { [ago(1)]: { weightLb: 160 } } }, () => {
-    const saved = [S.progEx, S.progView]; S.progEx = "db_curl"; S.progView = "lifts";
+    const saved = S.progPage; S.progPage = "lift:db_curl";
     try { const html = renderProgress(); ok(html.includes("from 20 × 10"), "best set"); ok(html.includes("lb each"), "per hand"); ok(html.includes("both hands"), "bodyweight"); }
-    finally { [S.progEx, S.progView] = saved; }
+    finally { S.progPage = saved; }
   }));
 
   test("week strip: seven days around today, logged and planned marks", () => scene({
@@ -199,21 +199,51 @@ function run() {
   test("workout: the last-time line only shows when the steppers differ", () => scene({
     sessions: { ...session(ago(3), entry("deadlift", 50, 5)), ...session(today, { ex: "deadlift", id: "e", effort: null, sets: [0, 1, 2].map(() => ({ w: 50, r: 5, done: false })) }) } }, () => {
     const c = adviceCtx(today), e = S.sessions[today].entries[0];
-    ok(!renderEntry(e, 0, today, {}, c).includes("Same again"), "same");
-    e.sets[0].w = 60; ok(renderEntry(e, 0, today, {}, c).includes("Same again"), "different");
+    ok(!renderEntry(e, 0, today, [e], c, true).includes("Same again"), "same");
+    e.sets[0].w = 60; ok(renderEntry(e, 0, today, [e], c, true).includes("Same again"), "different");
   }));
   test("workout: a suggested weight is a chip that goes once applied", () => scene({ sessions: session(ago(3), { ...entry("deadlift", 20, 5), effort: "easy" }) }, () => {
-    const prog = progression("deadlift", today), e = { id: "e", sets: [{ w: 20, r: 5 }] };
-    ok(prog.bump > 0, "bump"); ok(renderProgHint(prog, false, e, 0, today).includes("upchip"), "chip");
-    e.sets[0].w = 20 + prog.bump; eq(renderProgHint(prog, false, e, 0, today), "");
+    const prog = progression("deadlift", today), e = { id: "e", ex: "deadlift", sets: [{ w: 20, r: 5 }] }, c = adviceCtx(today), h = () => renderEntry(e, 0, today, [e], c, true);
+    ok(prog.bump > 0, "bump"); ok(h().includes("upchip"), "chip"); ok(h().includes("hint info target"), "one target line");
+    e.sets[0].w = 20 + prog.bump; ok(!h().includes("upchip"), "gone once applied");
+  }));
+  test("workout: several exercises stay open at once", () => scene({
+    sessions: session(today, ...["deadlift", "pushup", "pullup"].map(ex => ({ ex, id: ex, effort: null, sets: [0, 1, 2].map(() => ({ w: 0, r: 5, done: false })) }))) }, () => {
+    const saved = [S.exOpen, S.setEdit]; S.exOpen = {}; S.setEdit = null;
+    try {
+      const es = S.sessions[today].entries, open = () => es.map((e, i) => entryOpen(e, i, es));
+      eq(open(), [true, false, false], "the first opens by itself");
+      S.exOpen.pushup = true; eq(open(), [true, true, false], "opening B leaves A open");
+      es[0].sets[0].done = true; es[1].sets[0].done = true; eq(open(), [true, true, false], "both in progress");
+      delete S.exOpen.pushup; eq(open(), [true, true, false], "in-progress ones stay open without being asked");
+      es[0].sets.forEach(x => x.done = true); eq(open(), [false, true, false], "a finished one folds, the other stays");
+      es[1].sets.forEach(x => x.done = true); eq(open(), [false, false, true], "then the next one opens");
+      S.exOpen.deadlift = true; eq(open()[0], true, "a finished one can be reopened");
+      const c = adviceCtx(today), line = renderEntry(es[1], 1, today, es, c, true), card = renderEntry(es[2], 2, today, es, c, true);
+      ok(line.includes("entry line complete") && line.includes("How did it feel"), "finished line asks effort once"); ok(card.includes("entry open"), "open card");
+      eq((card.match(/data-act="r"/g) || []).length, 1, "one set is being edited"); eq((card.match(/class="setline/g) || []).length, 2, "the others are a tap away");
+    } finally { [S.exOpen, S.setEdit] = saved; }
+  }));
+  test("layout: Week, Progress and every Setup page render", () => scene({
+    sessions: { ...session(ago(35), entry("deadlift", 50, 5)), ...session(ago(1), entry("deadlift", 60, 5)) }, settings: { unit: "lb", stdSex: "m" }, health: { [ago(1)]: { weightLb: 160 } } }, () => {
+    const saved = [S.tab, S.setupPage, S.progPage, S.weekOff, S.day];
+    try {
+      S.day = today; S.weekOff = 0; const w = renderWeek(); ok(w.includes("dayrow") && w.includes("wkmap") && w.includes("Coach on your week") && w.includes("Coming up"), "week");
+      S.weekOff = 1; const w1 = renderWeek(); ok(w1.includes("Week to") && !w1.includes("Coming up") && !w1.includes("Change targets"), "earlier week");
+      S.progPage = null; const o = renderProgress(); ok(o.includes('data-v="strength"') && o.includes('data-v="body"') && o.includes('data-v="volume"') && o.includes("↑ 20%"), "overview");
+      for (const pg of ["strength", "body", "volume"]) { S.progPage = pg; ok(renderProgress().includes("progback"), pg); }
+      S.tab = "settings"; S.setupPage = null; const m = renderSettings(); ok(m.includes("Week targets") && m.includes("Account and backup"), "setup");
+      for (const pg of ["goal", "week", "sessions", "equipment", "exercises", "about", "connections", "account"]) { S.setupPage = pg; ok(renderSettings().includes("setupback"), pg); }
+      S.tab = "today"; const t = renderToday(); ok(t.includes("bstrip") && t.includes("weekline") && t.includes('class="week"'), "today keeps the strip and gains the week line");
+    } finally { [S.tab, S.setupPage, S.progPage, S.weekOff, S.day] = saved; }
   }));
   test("workout: column labels go after three workouts", () => {
     scene({ sessions: { ...session(ago(1), entry("deadlift", 50, 5)), ...session(ago(2), entry("deadlift", 50, 5)) } }, () => ok(!knowsColumns()));
     scene({ sessions: { ...session(ago(1), entry("deadlift", 50, 5)), ...session(ago(2), entry("deadlift", 50, 5)), ...session(ago(3), entry("deadlift", 50, 5)) } }, () => ok(knowsColumns()));
   });
   test("progress: leads with the latest number and its change", () => scene({ sessions: { ...session(ago(35), entry("deadlift", 50, 5)), ...session(ago(1), entry("deadlift", 60, 5)) } }, () => {
-    const saved = [S.progEx, S.progView]; S.progEx = "deadlift"; S.progView = "lifts";
-    try { const h = renderProgress(); ok(h.includes("↑ 20%"), "trend"); ok(h.includes("in 4 wk"), "window"); ok(h.indexOf("hero") < h.indexOf("chart1"), "order"); } finally { [S.progEx, S.progView] = saved; }
+    const saved = S.progPage; S.progPage = "lift:deadlift";
+    try { const h = renderProgress(); ok(h.includes("↑ 20%"), "trend"); ok(h.includes("in 4 wk"), "window"); ok(h.indexOf("hero") < h.indexOf("chart1"), "order"); } finally { S.progPage = saved; }
   }));
 
   // Deload. Six weeks of the same three lifts a week, ending yesterday (the gear lets the weight go up)
@@ -244,7 +274,7 @@ function run() {
     const b = deloadPlan("pushup", today); eq([b.n, b.w, b.r], [2, 0, 10], "bodyweight: same load, ⅔ reps");
     const e = newEntry("deadlift", today); eq(e.sets.map(s => [s.w, s.r]), [[90, 5], [90, 5]], "added mid-deload starts light");
     S.sessions[today] = { date: today, deload: true, entries: [e] };
-    const c = adviceCtx(today), h = () => renderEntry(e, 0, today, {}, c);
+    const c = adviceCtx(today), h = () => renderEntry(e, 0, today, [e], c, true);
     ok(h().includes("Last full:") && h().includes("90 lb × 5, 2 sets"), "line"); ok(!h().includes("Same again"), "no undo button");
     ok(!/Add |Try |Hold the weight/.test(h()), "no progression text"); ok(!h().includes("dlapply"), "matches");
     e.sets[0].w = 100; ok(h().includes("dlapply"), "Use deload after an edit");
@@ -283,14 +313,19 @@ function run() {
   });
   test("deload charts: weekly grid marks deload columns", () => scene({ sessions: withDl(), settings: dlPast }, () => ok(renderMuscleWeeks(today).includes("c ok dl") || renderMuscleWeeks(today).includes(" dl\""), "dl cells")));
   test("deload charts: strength line skips deload sessions, shows them as ghosts with a pre-deload ref", () => scene({ sessions: withDl(), settings: dlPast }, () => {
-    const saved = [S.progEx, S.progView]; S.progEx = "deadlift"; S.progView = "lifts";
+    const saved = S.progPage; S.progPage = "lift:deadlift";
     try {
       const html = renderProgress();
       ok(S._chart.ghosts.length > 0 && S._chart.pts.every(p => !S.sessions[p.day].deload), "ghosts off the line");
       eq(S._chart.refs.length, 1, "one pre-deload ref"); ok(S._vchart.ghosts.every(g => g.cap > 0), "volume ceilings");
       ok(!html.includes("↓"), "no fake drop"); ok(html.includes("Pre-deload best"), "legend");
       const el = document.createElement("div"); lineChart(el, S._chart); ok(el.querySelector("circle.ghost") && el.querySelector("line.ref") && el.querySelector(".dlband"), "drawn");
-    } finally { [S.progEx, S.progView] = saved; }
+    } finally { S.progPage = saved; }
+  }));
+  test("coach: every message has a kind, and questions carry buttons", () => scene({ sessions: steadyWeeks(6), settings: bigGear }, () => {
+    const m = coach(today).msgs; ok(m.length, "some"); ok(m.every(x => ["ask", "today", "week", "win", "echo"].includes(x.k)), m.filter(x => !x.k).map(x => x.t).join("|"));
+    ok(m.filter(x => x.k === "ask").every(x => x.t.includes("data-act")), "asks have buttons"); ok(m.filter(x => x.k === "week").every(x => x.id), "week notes can be quieted");
+    ok(m.some(x => x.k === "ask" && x.t.includes("deload-start")), "deload question");
   }));
   test("deload charts: rebound after a deload", () => {
     scene({ sessions: withDl(), settings: dlPast }, () => eq(rebound(today)?.back, ["deadlift"]));

@@ -1014,8 +1014,14 @@ function deloadOn(day) { return (S.settings.deloads || []).find(d => d.start <= 
 const DELOAD_VOL = .5;
 // Share of the days from..to (inclusive) that are deload days
 function deloadShare(from, to) { let n = 0, t = 0; for (let d = from; d <= to; d = addDays(d, 1)) { t++; if (deloadDay(d)) n++; } return t ? n / t : 0; }
-// What a window's load should be against a normal week: 1 normally, ~0.5 for a whole deload week, in between when it straddles one
-function deloadScale(from, to) { return 1 - deloadShare(from, to) * (1 - DELOAD_VOL); }
+// What a window's load should be against a normal week: 1 normally, ~0.5 for a whole deload week, in between when it straddles one.
+// A window only counts as a deload while its last day is in one, or (a week already over) when most of it was. Once a deload
+// ends you're back to normal and judged that way, even though the last 7 days still hold a few deload days.
+function deloadScale(from, to) {
+  const sh = deloadShare(from, to);
+  if (!sh || !(deloadDay(to) || (sh >= .5 && to < dayKey(new Date())))) return 1;
+  return 1 - sh * (1 - DELOAD_VOL);
+}
 // The 7-day weeks behind "usual": weeks first…first+3 back from day ([from, to]), leaving out any that touch a deload,
 // which is light on purpose and would make the week after it look like a spike. All four when every one does.
 function usualWeeks(day, first = 1) {
@@ -1951,9 +1957,9 @@ function weekState(m, v, dl) {
 }
 function renderWeekMap(end) {
   const from = addDays(end, -6), sp = setsPerMuscle(from, end), dl = deloadScale(from, end), jr = jointRatios(end), sel = S.bodySel;
-  const inDl = dl < 1 && deloadDay(end);   // after a deload, the window keeps scaled targets for a few days, but it's not a deload week
+  const inDl = dl < 1;
   const fmt = v => v.toFixed(v % 1 ? 1 : 0), st = m => weekState(m, sp[m], dl), n = m => MUSCLES[m].n.toLowerCase();
-  const range = m => { const M = MUSCLES[m]; return dl < 1 ? `${inDl ? "deload target" : "target this week"} up to ${fmt(M.hi * dl)}` : M.lo ? `${M.lo}–${M.hi}` : `up to ${M.hi}`; };
+  const range = m => { const M = MUSCLES[m]; return dl < 1 ? `deload target up to ${fmt(M.hi * dl)}` : M.lo ? `${M.lo}–${M.hi}` : `up to ${M.hi}`; };
   const ms = Object.keys(MUSCLES), lo = ms.filter(m => st(m) === "lo"), hi = ms.filter(m => st(m) === "hi"), tgt = ms.filter(m => MUSCLES[m].lo > 0);
   const said = `Sets per muscle against the weekly range. ${lo.length ? `Below range: ${lo.map(n).join(", ")}. ` : ""}${hi.length ? `Over: ${hi.map(n).join(", ")}. ` : ""}${!lo.length && !hi.length ? "Every muscle is in range." : ""}`;
   let detail = "Tap a muscle or joint for its numbers.";
@@ -2343,7 +2349,7 @@ function renderWeek() {
       <h2>How it went</h2>
       ${bests.length ? `<div class="small"><b>New bests:</b> ${bests.join(", ")}</div>` : ""}
       ${R.below.length ? `<div class="small"><b>Below range:</b> ${names(R.below)}</div>` : ""}
-      ${R.over.length ? `<div class="small"><b>${R.deload ? "Heavy for a deload" : R.scaled ? "Over target" : "Over the cap"}:</b> ${names(R.over)}</div>` : ""}${rebound}
+      ${R.over.length ? `<div class="small"><b>${R.deload ? "Heavy for a deload" : "Over the cap"}:</b> ${names(R.over)}</div>` : ""}${rebound}
     </section>` : "";
   return `${head}
     <section class="block wktop">${meters}${list}</section>
@@ -2549,9 +2555,6 @@ function weekReview(today) {
   const days = Array.from({ length: 7 }, (_, i) => addDays(from, i));
   const lifts = days.filter(liftedOn).length, mins = cardioMinutes(from, today);
   const sp = setsPerMuscle(from, today), ms = Object.keys(MUSCLES).filter(m => MUSCLES[m].lo > 0), dl = deloadScale(from, today);
-  // The 7 days can still hold a few deload days after it's over: targets stay scaled for those, but it isn't a deload week any more
-  const inDl = dl < 1 && deloadDay(today), dlDays = Math.round(deloadShare(from, today) * 7);
-  const dlNoun = inDl ? "a deload" : "a week with deload days in it";
   // In a deload, being under the usual range is the point: only going past the deload target is flagged
   const below = dl < 1 ? [] : ms.filter(m => sp[m] < MUSCLES[m].lo).sort((a, b) => (MUSCLES[b].lo - sp[b]) - (MUSCLES[a].lo - sp[a]));
   const over = Object.keys(MUSCLES).filter(m => sp[m] > MUSCLES[m].hi * (dl < 1 ? dl * DELOAD_SLACK : 1));
@@ -2563,16 +2566,15 @@ function weekReview(today) {
   const jr = jointRatios(today), hot = JOINT_ORDER.find(j => jr[j].acute > 0 && jr[j].ratio > 1.5), tr = recoveryTrend(today);
   const n = m => MUSCLES[m].n.toLowerCase();
   const focus = tr.hrvDown || tr.rhrUp ? "Recovery is dipping. Trim cardio first and hold your lifting weights."
-    : over.length && dl < 1 ? `Ease off ${n(over[0])}: ${Math.round(sp[over[0]])} sets is a lot for ${dlNoun} (aim for about ${Math.round(MUSCLES[over[0]].hi * dl)}).`
+    : over.length && dl < 1 ? `Ease off ${n(over[0])}: ${Math.round(sp[over[0]])} sets is a lot for a deload (aim for about ${Math.round(MUSCLES[over[0]].hi * dl)}).`
     : over.length ? `Ease off ${n(over[0])}: ${Math.round(sp[over[0]])} sets is past its cap of ${MUSCLES[over[0]].hi}.`
-    : inDl ? "Deload week: about half your usual sets, lighter weights, stop well short of failure. Afterwards, aim to beat your pre-deload numbers."
-    : dl < 1 ? `Back to normal training. The last 7 days still include ${dlDays} deload day${dlDays === 1 ? "" : "s"}, so this week's targets are scaled down a little. Aim to beat your pre-deload numbers.`
+    : dl < 1 ? "Deload week: about half your usual sets, lighter weights, stop well short of failure. Afterwards, aim to beat your pre-deload numbers."
     : hot ? `Go easier on your ${JOINT_NAMES[hot]}: its load is ${jr[hot].ratio.toFixed(1)}× a normal week.`
     : lifts < wk.lifts ? `Fit in ${wk.lifts - lifts} more lift${wk.lifts - lifts > 1 ? "s" : ""} to reach your ${wk.lifts} a week.`
     : mins < wk.cardioMin * .8 ? `Add cardio: ${mins} of ${wk.cardioMin} minutes.`
     : below.length ? `Add sets for ${n(below[0])}: ${Math.round(sp[below[0]])} of ${MUSCLES[below[0]].lo}.`
     : "Everything is on target. Keep it going.";
-  return { lifts, liftsT: wk.lifts, mins, minsT: wk.cardioMin, inRange: ms.filter(m => inRange(m, sp[m], dl) || (dl < 1 && sp[m] >= .5 && sp[m] <= MUSCLES[m].hi * dl)).length, muscles: ms.length, below, over, bests, focus, deload: inDl, scaled: dl < 1, rebound: rebound(today) };
+  return { lifts, liftsT: wk.lifts, mins, minsT: wk.cardioMin, inRange: ms.filter(m => inRange(m, sp[m], dl) || (dl < 1 && sp[m] >= .5 && sp[m] <= MUSCLES[m].hi * dl)).length, muscles: ms.length, below, over, bests, focus, deload: dl < 1, rebound: rebound(today) };
 }
 // Muscles with no minimum count once they've had real work (half a set, the point the weekly grid shows a number)
 // s scales the range for a week that's partly or wholly a deload (deloadScale)
@@ -2588,7 +2590,7 @@ function renderMuscleBars(today) {
   const fmt = v => v.toFixed(v % 1 ? 1 : 0);
   const bars = Object.keys(MUSCLES).filter(m => MUSCLES[m].lo > 0 || wk[m] > 0 || cw[m] >= .05).map(m => {
     const M = MUSCLES[m], v = wk[m], c = cw[m] >= .05 ? cw[m] : 0, lo = M.lo * dl, hi = M.hi * dl;
-    const tip = `${M.n}: ${fmt(v)} lifting sets${c ? ` + ${c.toFixed(1)} from cardio` : ""} · ${dl < 1 ? `${deloadDay(today) ? "deload target" : "target with this week's deload days"} ${fmt(lo)}–${fmt(hi)} (normally ${M.lo}–${M.hi})` : `target ${M.lo}–${M.hi}`}`;
+    const tip = `${M.n}: ${fmt(v)} lifting sets${c ? ` + ${c.toFixed(1)} from cardio` : ""} · ${dl < 1 ? `deload target ${fmt(lo)}–${fmt(hi)} (normally ${M.lo}–${M.hi})` : `target ${M.lo}–${M.hi}`}`;
     const fcls = v > M.hi ? "over" : v > hi * (dl < 1 ? DELOAD_SLACK : 1) ? "warnf" : "";
     return `<div class="bar"><span${inRange(m, v, dl) ? ` class="inrange"` : ""}>${M.n}</span><div class="track" title="${tip}">
       ${dl < 1 ? `<div class="band ghost" style="left:${M.lo / maxV * 100}%;width:${(M.hi - M.lo) / maxV * 100}%"></div>` : ""}

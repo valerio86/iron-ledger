@@ -290,9 +290,14 @@ function run() {
   }));
   test("deload: once it's over, the week view stops calling it a deload week", () => {
     scene({ sessions: steadyWeeks(3), settings: { ...bigGear, deloads: [{ start: ago(11), end: ago(5) }] } }, () => {
-      const r = weekReview(today); ok(!r.deload, "not a deload"); ok(r.scaled, "targets still scaled for the 2 deload days");
-      ok(/^Back to normal/.test(r.focus) && r.focus.includes("2 deload days"), r.focus); ok(!renderWeekMap(today).includes("for a deload week"), "map verdict");
+      eq(deloadScale(ago(6), today), 1, "2 deload days left in the window: judged as a normal week");
+      const r = weekReview(today); ok(!r.deload, "not a deload"); ok(!/Deload/.test(r.focus), r.focus);
+      ok(!/deload/i.test(renderWeekMap(today)), "body map"); ok(!/eload/.test(renderMuscleBars(today)), "muscle bars");
+      ok(weeklyLoad(today).dlT == null, "workload"); ok(JOINT_ORDER.every(j => jointRatios(today)[j].target == null), "joints");
+      ok(deloadScale(ago(13), ago(7)) < 1, "the week to 7 days ago was mostly the deload: still marked");
     });
+    scene({ sessions: steadyWeeks(3), settings: { ...bigGear, deloads: [{ start: ago(8), end: ago(2) }] } }, () =>
+      eq(deloadScale(ago(6), today), 1, "the day after a deload ends, today's week is normal"));
     scene({ sessions: steadyWeeks(3), settings: { ...bigGear, deloads: [{ start: ago(2), end: addDays(today, 4) }] } }, () => {
       const r = weekReview(today); ok(r.deload, "still in it"); ok(/^Deload week/.test(r.focus), r.focus);
     });

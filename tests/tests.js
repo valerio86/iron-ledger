@@ -424,6 +424,38 @@ function run() {
     const sessions = { ...session(ago(2), entry("db_row", 40, 8, "solid", 4), entry("chinup", 0, 8, "solid", 4)), ...session(ago(4), entry("db_row", 40, 8, "solid", 4)) };
     scene({ sessions, settings: dbGear }, () => ok(!buildSession(today).items.some(x => ["db_curl", "hammer", "bb_curl"].includes(x.ex)), "curls added"));
   });
+  test("balanced: a core exercise every session, taking turns between kinds", () => {
+    scene({ settings: dbGear }, () => eq(buildSession(today).items.filter(x => coreType(x.ex)).map(x => x.ex), ["plank"]));
+    const s1 = session(ago(2), entry("plank", 0, 30));
+    scene({ sessions: s1, settings: dbGear }, () => eq(coreType(buildSession(today).items.find(x => coreType(x.ex)).ex), "rotate"));
+    const s2 = { ...s1, ...session(ago(1), entry("twist", 0, 12)) };
+    scene({ sessions: s2, settings: dbGear }, () => eq(coreType(buildSession(today).items.find(x => coreType(x.ex)).ex), "flex"));
+    scene({ sessions: s2, settings: { ...dbGear, prefs: { skip: { situp: { k: "never", since: ago(9) } } } } }, () => ok(!buildSession(today).items.some(x => x.ex === "situp"), "skipped core picked"));
+  });
+  const curlWeeks = { ...session(ago(30), entry("db_curl", 20, 10)), ...session(ago(23), entry("db_curl", 20, 10)), ...session(ago(16), entry("db_curl", 20, 10)) };
+  test("dropped: a regular accessory gone quiet is one; a main lift or a recent one isn't", () => {
+    scene({ sessions: curlWeeks, settings: dbGear }, () => eq(droppedLifts(today).map(d => [d.id, d.n, d.gap]), [["db_curl", 3, 16]]));
+    scene({ sessions: { ...curlWeeks, ...session(ago(3), entry("db_curl", 20, 10)) }, settings: dbGear }, () => eq(droppedLifts(today), []));
+    scene({ sessions: { ...session(ago(30), entry("db_row", 20, 10)), ...session(ago(23), entry("db_row", 20, 10)), ...session(ago(16), entry("db_row", 20, 10)) }, settings: dbGear }, () => eq(droppedLifts(today), []));
+    scene({ sessions: curlWeeks, settings: { ...dbGear, prefs: { skip: { db_curl: { k: "cycle", since: ago(1) } } } } }, () => eq(droppedLifts(today), []));
+  });
+  test("dropped: the balanced session brings it back, so the coach doesn't ask", () => scene({ sessions: curlWeeks, settings: dbGear }, () => {
+    const b = buildSession(today); ok(b.items.some(x => x.ex === "db_curl"), b.items.map(x => x.ex).join()); ok(b.why.some(w => w.includes("not done in 16 days")), "why line");
+    ok(b.items.length <= 6, "3 main + core + 2 accessories at most");
+    ok(!coach(today).msgs.some(m => m.id === "dropped:db_curl"), "asked anyway");
+  }));
+  test("dropped: with a routine, the coach asks on a lifting day and says nothing was stalled", () => {
+    const settings = { unit: "lb", equip: dbGear.equip }, routines = { a: { id: "a", name: "A", items: [{ ex: "goblet", sets: 3, r: 8 }] } };
+    scene({ sessions: curlWeeks, settings, routines }, () => {
+      const m = coach(today).msgs; ok(m.some(x => x.id === "dropped:db_curl" && x.t.includes("Add to today")), "no ask"); ok(!m.some(x => x.t.includes("hasn't moved")), "called a stall");
+    });
+    scene({ sessions: { ...curlWeeks, ...session(today, entry("db_curl", 20, 10)) }, settings, routines }, () => ok(!coach(today).msgs.some(x => x.id === "dropped:db_curl"), "asked though it's in today's session"));
+  });
+  test("stall: one flat session in three weeks is too little to call", () => eq(stalled({ ...session(ago(40), entry("bb_row", 50, 8)), ...session(ago(33), entry("bb_row", 50, 8)), ...session(ago(26), entry("bb_row", 50, 8)), ...session(ago(15), entry("bb_row", 50, 8)) }), false));
+  test("balanced: accessories for a muscle take turns", () => {
+    const s = { ...session(ago(20), entry("tri_oh", 20, 10)), ...session(ago(12), entry("skull", 20, 10)) };
+    scene({ sessions: s, settings: { ...dbGear, prefs: { fav: ["tri_oh", "skull"] } } }, () => ok(!buildSession(today).items.some(x => x.ex === "skull"), "most recent one picked again"));
+  });
   test("balanced: accessories don't repeat a main slot's movement", () => scene({ settings: dbGear }, () => {
     const b = buildSession(today), mainSubs = b.items.slice(0, 3).map(x => Object.keys(SLOT_SUBS).find(k => SLOT_SUBS[k][1].includes(x.ex)));
     for (const x of b.items.slice(3)) ok(!mainSubs.some(k => SLOT_SUBS[k][1].includes(x.ex)), `${x.ex} repeats a main movement`);

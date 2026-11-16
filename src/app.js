@@ -1053,11 +1053,15 @@ function hardWeeks(day) {
   return n;
 }
 // Lifts with no progress in 3 weeks (best estimate, heaviest weight and reps at it all flat). Deload sessions don't count.
+// It has to be a lift you're still training: 2+ sessions in those 3 weeks, the last within DROP_AFTER days. One you've
+// stopped doing hasn't stalled, it's been dropped (droppedLifts).
 function stalledLifts(day) {
   const out = [];
   for (const ex of allEx()) {
     const h = historyFor(ex.id, undefined, true).filter(r => r.day > addDays(day, -42) && r.day <= day);
     if (h.length < 4 || atCap(ex.id)) continue;   // capped lifts progress by reps; not a stall
+    const recDays = [...new Set(h.filter(r => r.day > addDays(day, -21)).map(r => r.day))].sort();
+    if (recDays.length < 2 || daysBetween(recDays[recDays.length - 1], day) >= DROP_AFTER) continue;
     const recent = Math.max(0, ...h.filter(r => r.day > addDays(day, -21)).map(r => r.score));
     const prior = Math.max(0, ...h.filter(r => r.day <= addDays(day, -21)).map(r => r.score));
     // A heavier weight, or more reps at your heaviest, is progress even when the estimate says otherwise
@@ -1067,6 +1071,18 @@ function stalledLifts(day) {
     if (prior && recent && recent <= prior * 1.005) out.push(ex);
   }
   return out;
+}
+/* Regular accessories that have gone quiet: done on 3+ days in the last 8 weeks (or a favourite done at least once), but not
+   in the last DROP_AFTER days. Longest gap first. Main movements aren't here (a balanced session rotates those by your
+   order), nor is anything your routines already schedule, or that you've set aside. */
+const DROP_AFTER = 10, REGULAR_DAYS = 3, REGULAR_SPAN = 56;
+function droppedLifts(day) {
+  const seen = {};
+  for (const x of allDoneSets(x => x.day < day && x.day >= addDays(day, -REGULAR_SPAN))) (seen[x.ex.id] ||= new Set()).add(x.day);
+  const scheduled = autoMode() ? new Set() : new Set(Object.values(S.routines).flatMap(r => r.items.map(i => i.ex)));
+  return Object.entries(seen).map(([id, days]) => ({ id, n: days.size, gap: daysBetween([...days].sort().pop(), day) }))
+    .filter(x => x.gap >= DROP_AFTER && (x.n >= REGULAR_DAYS || isFav(x.id)) && !subOf(x.id) && !scheduled.has(x.id) && !skipped(x.id) && canDo(x.id))
+    .sort((a, b) => b.gap - a.gap);
 }
 function deloadDue(day) {
   const first = firstDay();
@@ -1372,9 +1388,11 @@ function routineCoverage(day) {
 
 /* Balanced session (settings.week.mode = "auto"): built each day instead of taken from a routine.
    Full body, three main slots (lower, push, pull), each alternating between its two movements so each is
-   trained about 1.5× a week on 3 lift days (frequency helps strength: docs/training-research.md §3). Then up to
-   2 accessories for the muscles furthest below their weekly range. Exercises: what your gear and joints allow,
-   preferring the ones you've done most (so progression has a history to work from). */
+   trained about 1.5× a week on 3 lift days (frequency helps strength: docs/training-research.md §3). Then one core
+   exercise, taking turns between bracing, rotation and flexion (CORE_TYPES). Then up to 2 accessories: first a regular
+   of yours that has gone quiet (droppedLifts), then the muscles furthest below their weekly range, taking turns between
+   the exercises you've done for that muscle. Exercises: what your gear and joints allow; main lifts prefer the ones
+   you've done most (so progression has a history to work from). */
 const SLOT_SUBS = {
   squat:  ["Squat", ["squat", "front_squat", "goblet", "split_squat", "lunge"], "squat"],
   hinge:  ["Hinge", ["deadlift", "rdl", "hip_thrust", "sl_rdl", "glute_bridge", "kb_swing"], "hinge"],
@@ -1385,6 +1403,12 @@ const SLOT_SUBS = {
 };
 const SESSION_SLOTS = [["squat", "hinge"], ["hpress", "vpress"], ["hpull", "vpull"]];
 const AUTO = { id: "auto", name: "Balanced session", items: [], auto: true };
+const CORE_TYPES = { brace: ["Bracing", ["plank", "ab_wheel"]], rotate: ["Rotation", ["side_plank", "twist", "pallof"]], flex: ["Flexion", ["leg_raise", "situp", "crunch"]] };
+// Which kind of core work an exercise is (your own core exercises: rotation when obliques lead, else flexion); null when it isn't core
+function coreType(exId) {
+  const k = Object.keys(CORE_TYPES).find(k => CORE_TYPES[k][1].includes(exId)); if (k) return k;
+  const E = exById(exId); return E.pattern !== "core" ? null : (E.muscles.obliques || 0) >= 1 ? "rotate" : "flex";
+}
 const SMALL_MUSCLES = new Set(["calves", "sideDelt", "rearDelt", "forearms", "abs", "obliques"]);
 function autoMode() { return S.settings.week?.mode === "auto"; }
 
@@ -1499,25 +1523,53 @@ function buildSession(day) {
   const sk = prefs().skip;
   for (const sub of Object.keys(SLOT_SUBS)) if (sk["move:" + sub])
     why.push(`${MOVE_NAMES[sub].toLowerCase()} is on your ${sk["move:" + sub].k === "never" ? "never" : "skip-this-cycle"} list; accessories cover its muscles when they fall short`);
-  // Accessories: fresh muscles furthest below their weekly range, spread over the lift days left this week
   const proj = { ...ctx.wk };
+  const add = (id, n, sets, line) => {
+    items.push({ ex: id, ...n, sets, w: 0 }); why.push(line);
+    for (const [m, w] of Object.entries(exById(id).muscles)) if (proj[m] != null) proj[m] += w * sets;
+  };
   for (const it of items) for (const [m, w] of Object.entries(exById(it.ex).muscles)) if (proj[m] != null) proj[m] += w * it.sets;
+  const lastDone = {}; for (const x of allDoneSets(x => x.day < day)) if (!(lastDone[x.ex.id] >= x.day)) lastDone[x.ex.id] = x.day;
+  const mainIds = new Set(picked.flatMap(k => SLOT_SUBS[k][1]));   // no goblet squat after a split squat: a second helping of the same movement isn't an accessory
+  const free = id => !items.some(x => x.ex === id) && !mainIds.has(id) && !skipped(id) && ok(id, 0);
+  // Its main muscles are fresh enough, and these sets keep them inside the weekly range
+  const room = (id, sets) => Object.entries(exById(id).muscles).every(([m, w]) => w < 1 || proj[m] == null || (readiness(ctx.fat[m]) !== "fat" && proj[m] + sets <= MUSCLES[m].hi));
+  const lname = id => esc(exById(id).name.toLowerCase());
+  // A regular accessory you haven't done in a while gets a place before anything else is added
+  const due = droppedLifts(day).find(d => free(d.id) && room(d.id, numbers(d.id, false).sets));
+  const dueLine = d => `${lname(d.id)}: a regular of yours, not done in ${d.gap} days`;
+  // Core: one exercise every session. The kind you've gone longest without goes next; within it, your favourite or most used
+  if (due && coreType(due.id)) { const n = numbers(due.id, false); add(due.id, n, n.sets, dueLine(due)); }
+  else {
+    const cores = allEx().filter(e => coreType(e.id)), typeLast = k => cores.filter(e => coreType(e.id) === k).map(e => lastDone[e.id] || "").sort().pop() || "";
+    for (const k of Object.keys(CORE_TYPES).sort((a, b) => typeLast(a) < typeLast(b) ? -1 : typeLast(a) > typeLast(b) ? 1 : 0)) {
+      const pick = cores.filter(e => coreType(e.id) === k && free(e.id) && room(e.id, numbers(e.id, false).sets))
+        .sort((a, b) => isFav(b.id) - isFav(a.id) || (used[b.id] || 0) - (used[a.id] || 0))[0];
+      if (!pick) continue;
+      const n = numbers(pick.id, false);
+      add(pick.id, n, n.sets, `${lname(pick.id)}: core takes turns each session, and ${CORE_TYPES[k][0].toLowerCase()} is up${typeLast(k) ? ` (last ${agoText(typeLast(k), day)})` : ""}`);
+      break;
+    }
+  }
+  const maxAcc = isNewcomer(day) ? 1 : 2;
+  let acc = 0;
+  if (due && !coreType(due.id)) { const n = numbers(due.id, false); add(due.id, n, n.sets, dueLine(due)); acc++; }
+  // Then fresh muscles furthest below their weekly range, spread over the lift days left this week
   let liftsDone = 0; for (let i = 1; i <= 6; i++) if (liftedOn(addDays(day, -i))) liftsDone++;
   const left = Math.max(1, ({ ...WEEK_DEFAULT, ...(S.settings.week || {}) }).lifts - liftsDone);
   const need = m => MUSCLES[m].lo - proj[m];
   const gaps = Object.keys(MUSCLES).filter(m => MUSCLES[m].lo > 0 && readiness(ctx.fat[m]) !== "fat" && need(m) >= 2).sort((a, b) => need(b) - need(a));
-  const maxAcc = isNewcomer(day) ? 1 : 2;
-  const mainIds = new Set(picked.flatMap(k => SLOT_SUBS[k][1]));   // no goblet squat after a split squat: a second helping of the same movement isn't an accessory
+  // Among the exercises for a muscle: favourites, then the most direct, then the one you've gone longest without (ones you've never done come last)
+  const turn = id => lastDone[id] || "9";
   for (const m of gaps) {
-    if (items.length - picked.length >= maxAcc) break;
-    if (need(m) < 2) continue;   // an earlier accessory may have covered it
-    const pick = allEx().filter(e => (e.muscles[m] || 0) >= 1 && !items.some(x => x.ex === e.id) && !mainIds.has(e.id) && !skipped(e.id) && ok(e.id, 0))
-      .sort((a, b) => isFav(b.id) - isFav(a.id) || Object.keys(a.muscles).length - Object.keys(b.muscles).length || (used[b.id] || 0) - (used[a.id] || 0))[0];
+    if (acc >= maxAcc) break;
+    if (need(m) < 2) continue;   // an earlier pick may have covered it
+    const pick = allEx().filter(e => (e.muscles[m] || 0) >= 1 && free(e.id))
+      .sort((a, b) => isFav(b.id) - isFav(a.id) || Object.keys(a.muscles).length - Object.keys(b.muscles).length || (turn(a.id) < turn(b.id) ? -1 : turn(a.id) > turn(b.id) ? 1 : 0))[0];
     if (!pick) continue;
-    const n = numbers(pick.id, false), sets = Math.max(2, Math.min(3, Math.ceil(need(m) / left)));
-    items.push({ ex: pick.id, ...n, sets, w: 0 });
-    for (const [mm, w] of Object.entries(pick.muscles)) if (proj[mm] != null) proj[mm] += w * sets;
-    why.push(`${pick.name.toLowerCase()}: ${MUSCLES[m].n.toLowerCase()} at ${Math.round(ctx.wk[m])} of ${MUSCLES[m].lo}+ sets this week`);
+    const at = Math.round(ctx.wk[m]);
+    add(pick.id, numbers(pick.id, false), Math.max(2, Math.min(3, Math.ceil(need(m) / left))), `${lname(pick.id)}: ${MUSCLES[m].n.toLowerCase()} at ${at} of ${MUSCLES[m].lo}+ sets this week`);
+    acc++;
   }
   const name = picked.length ? "Full body: " + picked.map((k, i) => i ? SLOT_SUBS[k][0].toLowerCase() : SLOT_SUBS[k][0]).join(", ") : AUTO.name;
   return { ...AUTO, name, items, why, slots: picked };
@@ -1703,6 +1755,14 @@ function coach(day) {
   let trained = 0;
   for (let i = 0; i < 7; i++) { const s = S.sessions[addDays(day, -i)]; if (s?.entries?.some(e => doneSets(e).length)) trained++; }
   if (trained >= 6) msgs.push({ k: "week", id: "restdays", lvl: "warn", t: `${trained} training days out of the last 7. Plan a full rest day.` });
+
+  // 8a. A regular accessory you've stopped doing: asked on a lifting day, unless today's plan or session already has it
+  if (isToday && !dl && !sess?.finished && (sess?.entries?.length || plan.kind === "lift")) {
+    const has = new Set(sess?.entries?.length ? sess.entries.map(e => e.ex) : (plan.routine?.items || []).map(it => sess?.pre?.[it.ex] || it.ex));
+    for (const d of droppedLifts(day).filter(d => !has.has(d.id)).slice(0, 2))
+      msgs.push({ k: "ask", id: "dropped:" + d.id, lvl: "info", ic: "↻", t: `<b>${esc(exById(d.id).name)}</b> was a regular (${d.n} sessions in 8 weeks), but you haven't done it in <b>${d.gap} days</b>.
+        <div class="swaps"><button class="chipbtn primary" data-act="add" data-id="${esc(d.id)}">Add to today</button><button class="chipbtn" data-act="skipex" data-id="${esc(d.id)}" data-k="cycle">Let it go</button></div>` });
+  }
 
   // 8. Stalls
   if (!dl) for (const ex of stalledLifts(day)) {

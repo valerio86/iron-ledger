@@ -288,6 +288,15 @@ function run() {
     sessions: steadyWeeks(3), health: { [today]: { readiness: 85 } }, settings: { ...bigGear, deloads: [{ start: ago(1), end: addDays(today, 5) }] } }, () => {
     const m = coach(today).msgs; ok(m.some(x => x.t.includes("Deload week</b>, day 2 of 7")), "banner"); ok(!m.some(x => /push for a PR|Light this week/.test(x.t)), "nudges");
   }));
+  test("deload: once it's over, the week view stops calling it a deload week", () => {
+    scene({ sessions: steadyWeeks(3), settings: { ...bigGear, deloads: [{ start: ago(11), end: ago(5) }] } }, () => {
+      const r = weekReview(today); ok(!r.deload, "not a deload"); ok(r.scaled, "targets still scaled for the 2 deload days");
+      ok(/^Back to normal/.test(r.focus) && r.focus.includes("2 deload days"), r.focus); ok(!renderWeekMap(today).includes("for a deload week"), "map verdict");
+    });
+    scene({ sessions: steadyWeeks(3), settings: { ...bigGear, deloads: [{ start: ago(2), end: addDays(today, 4) }] } }, () => {
+      const r = weekReview(today); ok(r.deload, "still in it"); ok(/^Deload week/.test(r.focus), r.focus);
+    });
+  });
   test("coach: a hard walk names its muscles, not an empty list", () => scene({ cardio: [{ day: today, name: "Morning Walk", sport: "Walk", mins: 70, re: 35, muscles: { calves: .3, quads: .2 } }, { day: today, name: "Run", sport: "Run", mins: 30, re: 40, muscles: { quads: .7, calves: .6, hamstrings: .5, glutes: .3 } }] }, () => {
     const t = coach(today).msgs.map(m => m.t).join(" | ");
     ok(t.includes("also lightly loaded your calves and quads."), t); ok(t.includes("loaded your quads, calves and hamstrings."), t); ok(!/your \./.test(t), "empty list");

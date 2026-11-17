@@ -117,6 +117,72 @@ function atCap(exId) {
   return !!cap && h.length > 0 && Math.max(...h[h.length - 1].e.sets.map(s => s.w || 0)) >= cap - .01;
 }
 
+/* ---------- Plates and warm-ups ---------- */
+// settings.equip.load = { unit: "lb"|"kg" (the plates' unit), bar: { barbell, ezbar } in lb, pairs: { "<plate size>": pairs } }
+const PLATE_SIZES = { lb: [45, 35, 25, 10, 5, 2.5], kg: [25, 20, 15, 10, 5, 2.5, 1.25] };
+const PLATE_BARS = ["barbell", "ezbar"];
+function plateLoad() { const l = S.settings.equip?.load || {}; return { unit: l.unit || unit(), bar: l.bar || {}, pairs: l.pairs || {} }; }
+function setEquip(patch) { S.settings = { ...S.settings, equip: { ...(S.settings.equip || {}), ...equip(), ...patch } }; }
+// The bar this exercise is loaded on (the first one you own that it can use), or null
+function plateBar(exId) {
+  if (exById(exId).kind !== "weight") return null;
+  const have = equip().have;
+  for (const req of NEEDS[exId] || []) for (const t of req.split("|")) if (have.includes(t)) return PLATE_BARS.includes(t) ? t : null;
+  return null;
+}
+// Bar weight and plate pairs for this exercise, once you've entered them; plate sizes in the plates' unit
+function plateKit(exId) {
+  const tool = plateBar(exId), L = plateLoad();
+  if (!tool || !(L.bar[tool] > 0)) return null;
+  const toLb = L.unit === "kg" ? LB_PER_KG : 1;
+  const sizes = PLATE_SIZES[L.unit].map(w => ({ w, lb: w * toLb, pairs: L.pairs[w] || 0 })).filter(p => p.pairs > 0);
+  return sizes.length ? { tool, bar: L.bar[tool], unit: L.unit, toLb, sizes } : null;
+}
+// Every per-side load the plates can make, with the fewest plates for each (sizes are multiples of 1.25, so count in quarter units)
+function plateTable(kit) {
+  const best = new Map([[0, []]]);
+  for (const p of kit.sizes) {
+    const u = Math.round(p.w * 4);
+    for (const [s, list] of [...best.entries()].sort((a, b) => b[0] - a[0]))
+      for (let n = 1; n <= p.pairs; n++) {
+        const k = s + u * n, cand = [...list, ...Array(n).fill(p.w)];
+        if (!best.has(k) || best.get(k).length > cand.length) best.set(k, cand);
+      }
+  }
+  return best;
+}
+// Plates per side for a total in lb: { side (heaviest first, plate unit), exact, below, above (nearest loadable totals in lb) }
+function platesFor(lb, kit) {
+  const tbl = plateTable(kit), side = (lb - kit.bar) / 2 / kit.toLb, want = Math.round(side * 4);
+  const tot = k => +(kit.bar + 2 * (k / 4) * kit.toLb).toFixed(2);
+  if (side < -.01) return { side: [], exact: false, below: null, above: kit.bar };
+  if (tbl.has(want) && Math.abs(want / 4 - side) < .02) return { side: [...tbl.get(want)].sort((a, b) => b - a), exact: true };
+  const keys = [...tbl.keys()].sort((a, b) => a - b), lo = keys.filter(k => k / 4 < side).pop(), hi = keys.find(k => k / 4 > side);
+  return { side: [], exact: false, below: lo != null ? tot(lo) : null, above: hi != null ? tot(hi) : null };
+}
+function plateTxt(side) { return side.length ? side.map(w => String(+w)).join(" + ") : "empty bar"; }
+// Heaviest loadable weight at or under lb (plates when known, else the exercise's step)
+function loadableAtMost(lb, exId, kit) {
+  if (kit) { if (lb < kit.bar) return null; const p = platesFor(lb, kit); return p.exact ? lb : p.below; }
+  const step = unit() === "kg" ? stepLb() : (exById(exId).inc || 5);
+  return Math.floor(lb / step + 1e-6) * step;
+}
+// Main lifts get a short ramp up to the first working weight: about 40% × 8, 60% × 5 and, from 90 lb up, 80% × 3.
+// Warm-up sets aren't logged as sets, so they never count toward volume, bests or progression.
+const WARMUP_MIN = 40;
+let MAIN_LIFTS = null;   // built on first use: SLOT_SUBS is declared further down
+function warmups(exId, workLb) {
+  if (S.settings.warmups === false || !(MAIN_LIFTS ||= new Set(Object.values(SLOT_SUBS).flatMap(([, ids]) => ids))).has(exId) || exById(exId).kind !== "weight" || !(workLb >= WARMUP_MIN)) return [];
+  const kit = plateKit(exId), steps = [[.4, 8], [.6, 5], ...(workLb >= 90 ? [[.8, 3]] : [])], out = [];
+  for (const [f, r] of steps) {
+    let w = loadableAtMost(workLb * f, exId, kit);
+    if (w == null) w = kit ? kit.bar : 0;   // under the bar's weight: warm up with the empty bar
+    if (!(w > 0) || w > workLb - 5 || out.some(x => Math.abs(x.w - w) < .01)) continue;
+    out.push({ w, r, bar: !!kit && Math.abs(w - kit.bar) < .01, side: kit ? platesFor(w, kit).side : null });
+  }
+  return out;
+}
+
 /* ============================== Exercise guides ============================== */
 // s = setup, r = the rep, c = posture cues, m = common mistakes
 const GUIDE = {
@@ -2310,6 +2376,18 @@ function renderEntry(e, i, day, entries, actx, auto) {
     else if (prog.bump < 0) { tcls = "warn"; target = `${prog.text} <button class="linkbtn" data-act="bump" data-i="${i}" data-n="${prog.bump}">Apply</button>`; }
     else target = `${prog.text}${again}`;
   }
+  // Bar loading: plates per side for the set being edited, or the nearest weights the plates can make
+  const kit = plateKit(e.ex);
+  const plateLine = (st, j) => {
+    if (!kit || !(st.w > 0)) return "";
+    const P = platesFor(st.w, kit), pu = kit.unit;
+    if (P.exact) return `<div class="plates small" aria-label="Plates per side: ${plateTxt(P.side)} ${pu}">${P.side.length ? `<span class="pbar" aria-hidden="true">${P.side.map(w => `<i style="height:${Math.round(10 + 18 * Math.sqrt(w / PLATE_SIZES[pu][0]))}px"></i>`).join("")}</span>` : ""}<span class="muted">Per side</span> <b class="num">${plateTxt(P.side)}</b>${P.side.length ? ` <span class="muted">${pu}</span>` : ""}</div>`;
+    const opts = [P.below, P.above].filter(x => x != null);
+    return `<div class="plates small warn"><span>Your plates can't make ${fmtW(st.w)}.</span>${opts.map(w => ` <button class="chipbtn" data-act="wset" data-i="${i}" data-j="${j}" data-w="${w}">${fmtW(w)}</button>`).join("")}</div>`;
+  };
+  // Warm-up ramp before the first working set; tap a step to cross it off (not logged as a set)
+  const wus = started ? [] : warmups(e.ex, e.sets[0]?.w || 0);
+  const wuRow = wus.length ? `<div class="wu"><span class="label">Warm-up</span>${wus.map((x, k) => `<button class="wuchip ${(e.wu || []).includes(k) ? "done" : ""}" data-act="wu" data-i="${i}" data-k="${k}" aria-pressed="${(e.wu || []).includes(k)}"><b class="num">${x.bar ? "Bar" : fmtW(x.w)} × ${x.r}</b>${x.side && !x.bar ? `<span class="num">${plateTxt(x.side)}</span>` : ""}</button>`).join("")}</div>` : "";
   const first = e.sets.findIndex(s => !s.done);
   const ed = S.setEdit?.k === key && e.sets[S.setEdit.j] && !e.sets[S.setEdit.j].done ? S.setEdit.j : first;
   const rows = e.sets.map((s, j) => s.done ? `
@@ -2333,7 +2411,7 @@ function renderEntry(e, i, day, entries, actx, auto) {
         <input id="r-${i}-${j}" inputmode="numeric" data-act="r" data-i="${i}" data-j="${j}" value="${s.r}" aria-label="${unitLbl}, set ${j + 1}">
         <span class="u">${ex.kind === "time" ? "s" : "×"}</span><button data-act="r+" data-i="${i}" data-j="${j}" aria-label="More ${unitLbl}">+</button></div>
       <button class="check" data-act="done" data-i="${i}" data-j="${j}" aria-pressed="false" aria-label="Set ${j + 1} done">✓</button>
-    </div>`).join("");
+    </div>${plateLine(s, j)}`).join("");
   const menu = S.exMenu === key;
   return `
     <div class="entry open ${allDone ? "complete" : ""}">
@@ -2342,6 +2420,7 @@ function renderEntry(e, i, day, entries, actx, auto) {
       ${menu ? `<div class="exmenu"><button class="linkbtn" data-act="addset" data-i="${i}">+ Set</button>${e.sets.length > 1 ? `<button class="linkbtn" data-act="rmset" data-i="${i}">− Set</button>` : ""}${started ? "" : `<button class="linkbtn" data-act="swapsheet" data-i="${i}">⇄ Swap</button>`}<button class="linkbtn danger" data-act="rm" data-i="${i}">Remove</button></div>` : ""}
       ${adv.lvl ? `<div class="hint ${adv.lvl >= 2 ? "bad" : "warn"}"><b>${adv.lvl >= 2 ? "Not the best right now" : "Careful"}:</b> ${esc(adv.reasons.join("; "))}.${adv.alts.length ? `<div class="swaps">Swap for: ${adv.alts.map(a => `<button class="chipbtn" data-act="swap" data-i="${i}" data-id="${esc(a.id)}">${esc(a.name)}</button>`).join("")}</div>` : ""}</div>` : ""}
       ${target ? `<div class="hint ${tcls} target">${target}</div>` : ""}
+      ${wuRow}
       ${allDone || knowsColumns() ? "" : `<div class="setrow small muted" aria-hidden="true"><span></span><span class="label">${ex.kind === "time" ? "" : ex.kind === "bodyweight" ? "Added load" : "Weight"}</span><span class="label">${ex.kind === "time" ? "Seconds" : "Reps"}</span><span></span></div>`}
       ${rows}
       ${allDone || e.effort ? `<div class="foot"><span class="small muted">How did it feel?</span>${effortBtns}</div>` : ""}
@@ -2948,7 +3027,18 @@ function renderSettings() {
       <div class="mgrid">${Object.entries(EQUIP).map(([k, n]) => `<button type="button" data-act="eq" data-k="${k}" data-w="${eq.have.includes(k) ? 1 : 0}" aria-pressed="${eq.have.includes(k)}">${n}</button>`).join("")}</div>
       ${LOADABLE.filter(k => eq.have.includes(k)).map(k => `<label class="eqmax" for="eqmax-${k}"><span>${EQUIP[k]}: heaviest you can load${k === "dumbbells" || k === "kettlebell" ? " (each)" : ", bar included"}</span>
         <span class="stepper" style="display:inline-flex;width:auto"><input id="eqmax-${k}" inputmode="decimal" value="${eq.max[k] ? toDisp(eq.max[k]) : ""}" placeholder="no cap" style="width:72px"><span class="u">${unit()}</span></span></label>`).join("")}
-    </section>`;
+    </section>
+    ${PLATE_BARS.some(k => eq.have.includes(k)) ? (() => { const L = plateLoad(); return `<section class="block">
+      <h2>Bars and plates</h2>
+      <p class="small muted" style="margin:0">With these filled in, each set shows the plates to put on each side, and main lifts get a warm-up ramp you can actually load.</p>
+      ${PLATE_BARS.filter(k => eq.have.includes(k)).map(k => `<label class="eqmax" for="bar-${k}"><span>${EQUIP[k]} weight, empty</span>
+        <span class="stepper" style="display:inline-flex;width:auto"><input id="bar-${k}" inputmode="decimal" value="${L.bar[k] ? toDisp(L.bar[k]) : ""}" placeholder="?" style="width:72px"><span class="u">${unit()}</span></span></label>`).join("")}
+      <div class="list" style="margin-top:8px"><div class="row"><div class="l"><b>Plates</b><div class="small muted">Pairs you own (one for each side)</div></div>
+        <div class="seg" role="group" aria-label="Plate unit" style="margin:0">${["lb", "kg"].map(u => `<button data-act="plateunit" data-v="${u}" aria-pressed="${L.unit === u}">${u}</button>`).join("")}</div></div></div>
+      <div class="plategrid">${PLATE_SIZES[L.unit].map(w => { const n = L.pairs[w] || 0; return `<div class="pg"><span class="num"><b>${w}</b> ${L.unit}</span><span class="stepper" style="display:inline-flex;width:auto"><button data-act="pairs" data-w="${w}" data-d="-1" aria-label="One pair fewer of ${w} ${L.unit}" ${n ? "" : "disabled"}>−</button><span class="num" style="min-width:24px;text-align:center">${n}</span><button data-act="pairs" data-w="${w}" data-d="1" aria-label="One more pair of ${w} ${L.unit}">+</button></span></div>`; }).join("")}</div>
+      <div class="list" style="margin-top:8px"><div class="row"><div class="l"><b>Warm-up sets</b><div class="small muted">A short ramp before squats, hinges, presses and rows. Not logged as sets. ${srcBtn("warmup")}</div></div>
+        <button class="chipbtn ${S.settings.warmups === false ? "" : "primary"}" data-act="warmups" aria-pressed="${S.settings.warmups !== false}">${S.settings.warmups === false ? "Off" : "On"}</button></div></div>
+    </section>`; })() : ""}`;
   if (page === "exercises") {
     const view = S.exView === "map" ? "map" : "list";
     return `${back}
@@ -3266,6 +3356,10 @@ SOURCES.variety = { t: "Changing exercises", p: [
   "A systematic review adds the nuance: some <b>planned</b> variation (different angles for the same muscle) can spread growth more evenly across a muscle, while frequent, random switching can hold back gains, especially on skill-heavy lifts like the squat, where getting better at the movement is part of getting stronger.",
   "So Iron Ledger keeps your main lifts steady through a training block so progress can be tracked, and offers a change at the start of the next block or when a lift stalls. A one-off swap any day is fine."],
   refs: [["Kassiano et al. 2022, systematic review of exercise variation (J Strength Cond Res)", "https://pubmed.ncbi.nlm.nih.gov/35438660/"], ["Baz-Valle et al. 2019, random exercise variation in trained men (PLoS One)", "https://doi.org/10.1371/journal.pone.0226989"], ["Kassiano et al. 2024, constant vs varied exercises in women (Res Q Exerc Sport)", "https://ro.ecu.edu.au/ecuworks2022-2026/4912"]] };
+SOURCES.warmup = { t: "Warm-up sets", p: [
+  "A few lighter sets of the lift itself before the working sets is standard practice in strength coaching: it rehearses the movement and lets you check how the weight moves, without tiring you out. Studies that compared warm-up styles found that a lift-specific ramp like this leads to as many or more reps in the working sets, while long stretching beforehand can cost a little.",
+  "Iron Ledger ramps to about 40%, 60% and (from 90 lb) 80% of your first working weight, with fewer reps as it gets heavier, rounded to what your plates can make. Small accessories don't need it. Warm-up steps aren't logged, so they never count as sets."],
+  refs: [["Ribeiro et al. 2014, warm-up procedures and resistance training performance (Perceptual and Motor Skills)", "https://pubmed.ncbi.nlm.nih.gov/?term=Ribeiro+2014+warm-up+procedures+resistance+training+performance"], ["McCrary et al. 2015, systematic review of upper-body warm-ups (Br J Sports Med)", "https://pubmed.ncbi.nlm.nih.gov/?term=McCrary+2015+upper+body+warm-up+systematic+review"], ["NSCA, Essentials of Strength Training and Conditioning (warm-up chapter)", "https://www.nsca.com/education/books/essentials-of-strength-training-and-conditioning/"]] };
 function srcBtn(key) { return `<button class="help src" data-act="src" data-k="${key}" aria-label="Sources: ${esc(SOURCES[key].t)}">?</button>`; }
 function openSource(key) {
   const x = SOURCES[key]; if (!x) return;
@@ -3450,7 +3544,7 @@ document.addEventListener("click", async ev => {
     }
     case "eq": {
       const e = equip(), k = b.dataset.k, have = e.have.includes(k) ? e.have.filter(x => x !== k) : [...e.have, k];
-      S.settings = { ...S.settings, equip: { have, max: e.max } }; render(); await saveDoc("settings/main", S.settings); break;
+      setEquip({ have }); render(); await saveDoc("settings/main", S.settings); break;
     }
     case "bppat": S.libPat = b.dataset.v; render(); break;
     case "bpclear": S.libSel = null; render(); break;
@@ -3509,6 +3603,11 @@ document.addEventListener("click", async ev => {
     case "weekedit": S.weekEdit = !S.weekEdit; render(); break;
     case "tipok": case "tipsreset": S.settings = { ...S.settings, tipsSeen: act === "tipsreset" ? [] : [...new Set([...(S.settings.tipsSeen || []), b.dataset.k])] }; render(); if (act === "tipsreset") toast("Tips will show again"); await saveDoc("settings/main", S.settings); break;
     case "rmset": mutate(() => { E().sets.pop(); }); break;
+    case "plateunit": { const L = plateLoad(); if (L.unit !== b.dataset.v) setEquip({ load: { ...L, unit: b.dataset.v, pairs: {} } }); render(); await saveDoc("settings/main", S.settings); break; }
+    case "pairs": { const L = plateLoad(), w = b.dataset.w, n = Math.max(0, (L.pairs[w] || 0) + +b.dataset.d); setEquip({ load: { ...L, pairs: { ...L.pairs, [w]: n } } }); render(); await saveDoc("settings/main", S.settings); break; }
+    case "warmups": S.settings = { ...S.settings, warmups: S.settings.warmups === false }; render(); await saveDoc("settings/main", S.settings); break;
+    case "wu": mutate(() => { const k = +b.dataset.k, w = E().wu || []; E().wu = w.includes(k) ? w.filter(x => x !== k) : [...w, k]; }); break;
+    case "wset": mutate(() => { const sets = E().sets, old = sets[j].w, w = +b.dataset.w; for (let n = j; n < sets.length; n++) if (!sets[n].done && (n === j || sets[n].w === old)) sets[n].w = w; }); break;
     case "bump": mutate(() => { const n = +b.dataset.n; E().sets.forEach(s => { if (!s.done) { s.w = Math.max(0, +((s.w || 0) + n).toFixed(2)); if (n > 0 && E().rLo) s.r = E().rLo; } }); }); break;
     case "finish": mutate(s => { s.finished = !s.finished; s.finishedAt = s.finished ? Date.now() : null; }); if (S.sessions[S.day].finished) { toast("Workout logged"); window.scrollTo(0, 0); } break;
     case "wk": {
@@ -3578,9 +3677,13 @@ document.addEventListener("change", ev => {
   if (t.dataset.skipnote) { const key = t.dataset.skipnote, v = t.value.trim(); setPrefs(p => { if (p.skip[key]) { if (v) p.skip[key].note = v; else delete p.skip[key].note; } }); }
   if (t.dataset.re && S.rEdit) { const it = S.rEdit.items[+t.dataset.k], v = parseInt(t.value) || 0;
     if (t.dataset.re === "r") it.r = Math.max(1, v); else if (v > 0) it.rHi = v; else delete it.rHi; }
+  if (t.id?.startsWith("bar-")) {
+    const L = plateLoad(); setEquip({ load: { ...L, bar: { ...L.bar, [t.id.slice(4)]: t.value.trim() === "" ? 0 : fromDisp(t.value) } } });
+    render(); saveDoc("settings/main", S.settings);
+  }
   if (t.id?.startsWith("eqmax-")) {
     const k = t.id.slice(6), e = equip();
-    S.settings = { ...S.settings, equip: { have: e.have, max: { ...e.max, [k]: t.value.trim() === "" ? 0 : fromDisp(t.value) } } };
+    setEquip({ max: { ...e.max, [k]: t.value.trim() === "" ? 0 : fromDisp(t.value) } });
     render(); saveDoc("settings/main", S.settings);
   }
   if (t.id === "cx-pattern") draft.pattern = t.value;

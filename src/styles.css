@@ -559,3 +559,19 @@ section.block.wktop { margin-top: 0; }
 .row.nav .l { display: grid; gap: 1px; min-width: 0; }
 .exrow .chev { padding-left: 8px; }
 .list .row > .unit-toggle, .list .row > .stepper, .list .row > .pill { flex: none; }
+
+/* Plates per side and the warm-up ramp */
+.plates { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; padding: 2px 0 4px 36px; }
+.plates.warn { color: var(--warn); }
+.plates .chipbtn { padding: 2px 10px; font-size: 12px; }
+.pbar { display: inline-flex; align-items: center; gap: 2px; margin-right: 4px; padding-left: 6px; border-left: 3px solid var(--muted); height: 28px; }
+.pbar i { display: block; width: 6px; border-radius: 2px; background: var(--fg); }
+.wu { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.wuchip { display: grid; justify-items: center; gap: 0; border: 1px dashed var(--line); background: var(--bg); border-radius: 8px; padding: 4px 10px; font-size: 13px; color: var(--fg); }
+.wuchip span { font-size: 11px; color: var(--muted); }
+.wuchip.done { border-style: solid; opacity: .5; text-decoration: line-through; }
+.plategrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 6px 12px; margin-top: 6px; }
+.plategrid .pg { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 14px; }
+.row .seg { flex: none; }
+.row .seg button { padding: 6px 12px; }
+.plategrid .pg > span:first-child { white-space: nowrap; }

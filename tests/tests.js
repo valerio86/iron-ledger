@@ -55,7 +55,38 @@ function run() {
     scene({ sessions }, () => { ok(atCap("deadlift")); ok(progression("deadlift").capped); });
     scene({ sessions, settings: bigGear }, () => { ok(!atCap("deadlift")); const p = progression("deadlift"); ok(!p.capped); ok(p.bump > 0, "should add weight"); });
   });
-  test("gear: missing gear blocks the exercise", () => scene({ settings: bigGear }, () => { ok(!canDo("squat")); ok(canDo("db_curl")); }));
+  const plateGear = (pairs, bar = 20, extra = {}) => ({ unit: "lb", ...extra, equip: { ...bigGear.equip, load: { unit: "lb", bar: { barbell: bar, ezbar: 15 }, pairs } } });
+  test("plates: none shown until the bar weight and plates are entered", () => {
+    scene({ settings: bigGear }, () => eq(plateKit("deadlift"), null));
+    scene({ settings: plateGear({}) }, () => eq(plateKit("deadlift"), null));
+    scene({ settings: plateGear({ 10: 2 }) }, () => { eq(plateKit("deadlift").bar, 20); eq(plateKit("db_curl"), null); eq(plateKit("pullup"), null); });
+  });
+  test("plates: fewest plates per side, heaviest first", () => scene({ settings: plateGear({ 25: 1, 10: 2, 5: 2, 2.5: 1 }) }, () => {
+    const k = plateKit("deadlift");
+    eq(platesFor(95, k).side, [25, 10, 2.5]); eq(platesFor(20, k).side, []); eq(platesFor(60, k).side, [10, 10]);
+    eq(platesFor(110, k).side, [25, 10, 10]); eq(platesFor(105, k).side, [25, 10, 5, 2.5]);
+  }));
+  test("plates: a weight the plates can't make offers the nearest two", () => scene({ settings: plateGear({ 10: 2, 5: 1 }) }, () => {
+    const p = platesFor(47.5, plateKit("deadlift")); ok(!p.exact); eq([p.below, p.above], [40, 50]);
+    eq(platesFor(200, plateKit("deadlift")).below, 70);
+  }));
+  test("plates: the EZ bar uses its own weight", () => scene({ settings: plateGear({ 10: 2 }) }, () => eq(plateKit("bb_curl").bar, 15)));
+  test("plates: kg plates", () => scene({ settings: { ...plateGear({}), equip: { ...bigGear.equip, load: { unit: "kg", bar: { barbell: 20 * LB_PER_KG }, pairs: { 20: 1, 1.25: 1 } } } } }, () => {
+    const k = plateKit("deadlift"); eq(platesFor(62.5 * LB_PER_KG, k).side, [20, 1.25]);
+  }));
+  test("warm-ups: a loadable ramp for main lifts only", () => scene({ settings: plateGear({ 25: 1, 10: 2, 5: 2, 2.5: 1 }) }, () => {
+    eq(warmups("deadlift", 100).map(x => [x.w, x.r]), [[40, 8], [60, 5], [80, 3]]);
+    eq(warmups("deadlift", 60).map(x => [x.w, x.r, x.bar]), [[20, 8, true], [35, 5, false]]);
+    eq(warmups("db_curl", 100), []); eq(warmups("deadlift", 30), []);
+  }));
+  test("warm-ups: no plates entered rounds down to the step; can be switched off", () => {
+    scene({ settings: bigGear }, () => eq(warmups("deadlift", 100).map(x => x.w), [40, 60, 80]));
+    scene({ settings: { ...bigGear, warmups: false } }, () => eq(warmups("deadlift", 100), []));
+  });
+  test("warm-ups: never logged as sets, so the estimate ignores them", () => {
+    const e = { ...entry("deadlift", 50, 5), wu: [0, 1] }; near(entryScore(e, exById("deadlift")), 58.33);
+  });
+  test("gear: missing gear blocks the exercise",() => scene({ settings: bigGear }, () => { ok(!canDo("squat")); ok(canDo("db_curl")); }));
 
   const stalled = sessions => scene({ sessions, settings: bigGear }, () => coach(today).msgs.some(m => m.t.includes("hasn't moved")));
   test("stall: moving up in weight isn't one, even if the estimate is flat", () => eq(stalled({ ...session(ago(25), entry("bb_row", 50, 16)), ...session(ago(10), entry("bb_row", 50, 13)), ...session(ago(5), entry("bb_row", 50, 13)), ...session(ago(1), entry("bb_row", 60, 8)) }), false));

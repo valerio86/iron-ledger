@@ -55,24 +55,55 @@ function run() {
     scene({ sessions }, () => { ok(atCap("deadlift")); ok(progression("deadlift").capped); });
     scene({ sessions, settings: bigGear }, () => { ok(!atCap("deadlift")); const p = progression("deadlift"); ok(!p.capped); ok(p.bump > 0, "should add weight"); });
   });
-  const plateGear = (pairs, bar = 20, extra = {}) => ({ unit: "lb", ...extra, equip: { ...bigGear.equip, load: { unit: "lb", bar: { barbell: bar, ezbar: 15 }, pairs } } });
+  const plateGear = (pairs, bar = 20, extra = {}) => ({ unit: "lb", ...extra, equip: { ...bigGear.equip, load: { unit: "lb", bar: { barbell: bar, ezbar: 15 }, plates: Object.fromEntries(Object.entries(pairs).map(([w, n]) => [w.includes("kg") || w.includes("lb") ? w : w + "lb", n])) } } });
+  const ws = side => side.map(p => p.w);
   test("plates: none shown until the bar weight and plates are entered", () => {
     scene({ settings: bigGear }, () => eq(plateKit("deadlift"), null));
     scene({ settings: plateGear({}) }, () => eq(plateKit("deadlift"), null));
+    scene({ settings: bigGear }, () => eq(plateLoad().mode, "max"));
     scene({ settings: plateGear({ 10: 2 }) }, () => { eq(plateKit("deadlift").bar, 20); eq(plateKit("db_curl"), null); eq(plateKit("pullup"), null); });
   });
   test("plates: fewest plates per side, heaviest first", () => scene({ settings: plateGear({ 25: 1, 10: 2, 5: 2, 2.5: 1 }) }, () => {
     const k = plateKit("deadlift");
-    eq(platesFor(95, k).side, [25, 10, 2.5]); eq(platesFor(20, k).side, []); eq(platesFor(60, k).side, [10, 10]);
-    eq(platesFor(110, k).side, [25, 10, 10]); eq(platesFor(105, k).side, [25, 10, 5, 2.5]);
+    eq(ws(platesFor(95, k).side), [25, 10, 2.5]); eq(platesFor(20, k).side, []); eq(ws(platesFor(60, k).side), [10, 10]);
+    eq(ws(platesFor(110, k).side), [25, 10, 10]); eq(ws(platesFor(105, k).side), [25, 10, 5, 2.5]); eq(plateTxt(platesFor(95, k).side), "25 + 10 + 2.5 lb");
   }));
   test("plates: a weight the plates can't make offers the nearest two", () => scene({ settings: plateGear({ 10: 2, 5: 1 }) }, () => {
     const p = platesFor(47.5, plateKit("deadlift")); ok(!p.exact); eq([p.below, p.above], [40, 50]);
     eq(platesFor(200, plateKit("deadlift")).below, 70);
   }));
+  test("loads: Just the max ignores the plates", () => scene({ settings: plateGear({ 10: 2 }) }, () => {
+    eq(plateLoad().mode, "plates", "defaults to plates once a bar weight is in");
+    S.settings.equip.load.mode = "max"; eq(plateKit("deadlift"), null); eq(capLb("deadlift"), 150); eq(warmups("deadlift", 100).map(x => x.w), [40, 60, 80]);
+  }));
+  test("loads: the max is worked out from bar and plates, capped by the limit", () => scene({ settings: plateGear({ 45: 1, 25: 1, 10: 2 }) }, () => {
+    eq(capLb("deadlift"), 20 + 2 * (45 + 25 + 20));
+    S.settings.equip.load.limit = { barbell: 150 }; eq(capLb("deadlift"), 150);
+    const P = platesFor(160, plateKit("deadlift")); ok(!P.exact); eq(P.above, null);
+  }));
+  test("loads: no plates entered keeps the typed max", () => scene({ settings: plateGear({}) }, () => eq(capLb("deadlift"), 150)));
+  test("dumbbells: loadable handles; two-dumbbell lifts get half the pairs each", () => scene({ settings: plateGear({ 10: 2, 5: 1, 2.5: 2 }, 20, {}) }, () => {
+    S.settings.equip.load.bar.dumbbells = 5;
+    const two = plateKit("db_curl"), one = plateKit("db_row");
+    ok(two.two && !one.two);
+    eq(capLb("db_curl"), 5 + 2 * (10 + 2.5)); eq(capLb("db_row"), 5 + 2 * (20 + 5 + 5));
+    eq(ws(platesFor(25, two).side), [10]); eq(ws(platesFor(45, one).side), [10, 10]);
+    S.settings.equip.load.bar.dumbbells = 0; eq(plateKit("db_curl"), null); eq(capLb("db_curl"), 50, "fixed dumbbells keep the typed max");
+  }));
   test("plates: the EZ bar uses its own weight", () => scene({ settings: plateGear({ 10: 2 }) }, () => eq(plateKit("bb_curl").bar, 15)));
-  test("plates: kg plates", () => scene({ settings: { ...plateGear({}), equip: { ...bigGear.equip, load: { unit: "kg", bar: { barbell: 20 * LB_PER_KG }, pairs: { 20: 1, 1.25: 1 } } } } }, () => {
-    const k = plateKit("deadlift"); eq(platesFor(62.5 * LB_PER_KG, k).side, [20, 1.25]);
+  test("plates: kg plates", () => scene({ settings: plateGear({ "20kg": 1, "1.25kg": 1 }, 20 * LB_PER_KG) }, () => {
+    const k = plateKit("deadlift"); eq(ws(platesFor(62.5 * LB_PER_KG, k).side), [20, 1.25]); eq(plateTxt(platesFor(62.5 * LB_PER_KG, k).side), "20 + 1.25 kg");
+  }));
+  test("plates: 15s are a standard lb size", () => { ok(PLATE_SIZES.lb.includes(15)); scene({ settings: plateGear({ 15: 1, 10: 1 }) }, () => eq(ws(platesFor(70, plateKit("deadlift")).side), [15, 10])); });
+  test("plates: lb and kg mixed on one bar, each plate named with its unit", () => scene({ settings: plateGear({ "20kg": 1, 10: 1, 2.5: 1 }) }, () => {
+    const k = plateKit("deadlift"), lb = 20 + 2 * (20 * LB_PER_KG + 10), P = platesFor(lb, k);
+    ok(P.exact); eq(plateTxt(P.side), "20 kg + 10 lb");
+    ok(platesFor(Math.round(lb), k).exact, "within rounding of the lb number counts");
+    const Q = platesFor(100, k); ok(!Q.exact); ok(Q.below < 100 && Q.above > 100);
+  }));
+  test("plates: an odd size you add yourself", () => scene({ settings: plateGear({ "7.5lb": 1 }) }, () => eq(ws(platesFor(35, plateKit("deadlift")).side), [7.5])));
+  test("plates: the first version's single-unit pairs still read", () => scene({ settings: { ...bigGear, equip: { ...bigGear.equip, load: { unit: "kg", bar: { barbell: 44 }, pairs: { 20: 1 } } } } }, () => {
+    eq(plateLoad().plates, { "20kg": 1 }); ok(plateKit("deadlift").sizes[0].u === "kg");
   }));
   test("warm-ups: a loadable ramp for main lifts only", () => scene({ settings: plateGear({ 25: 1, 10: 2, 5: 2, 2.5: 1 }) }, () => {
     eq(warmups("deadlift", 100).map(x => [x.w, x.r]), [[40, 8], [60, 5], [80, 3]]);

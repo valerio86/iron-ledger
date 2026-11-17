@@ -108,6 +108,7 @@ function canDo(exId) { return !missingFor(exId).length; }
 // Heaviest load (lb) the gear you own allows on this exercise, or null when there's no cap
 function capLb(exId) {
   if (exById(exId).kind !== "weight") return null;
+  const kit = plateKit(exId); if (kit) return kitMax(kit);
   const { have, max } = equip();
   for (const req of NEEDS[exId] || []) for (const t of req.split("|")) if (LOADABLE.includes(t) && have.includes(t) && max[t]) return max[t];
   return null;
@@ -118,10 +119,22 @@ function atCap(exId) {
 }
 
 /* ---------- Plates and warm-ups ---------- */
-// settings.equip.load = { unit: "lb"|"kg" (the plates' unit), bar: { barbell, ezbar } in lb, pairs: { "<plate size>": pairs } }
-const PLATE_SIZES = { lb: [45, 35, 25, 10, 5, 2.5], kg: [25, 20, 15, 10, 5, 2.5, 1.25] };
-const PLATE_BARS = ["barbell", "ezbar"];
-function plateLoad() { const l = S.settings.equip?.load || {}; return { unit: l.unit || unit(), bar: l.bar || {}, pairs: l.pairs || {} }; }
+// settings.equip.load = { mode: "max" (just type the heaviest load) | "plates" (work it out from bars and plates),
+//   unit: which standard sizes to list ("lb"|"kg"), bar: { barbell, ezbar, dumbbells (one handle) } empty weights in lb,
+//   limit: { tool: lb } (a bar's rating or sleeve room), plates: { "45lb": pairs, "20kg": pairs } }
+// Each plate keeps its own unit, so lb and kg plates (and odd sizes) can be mixed on one bar.
+const PLATE_SIZES = { lb: [45, 35, 25, 15, 10, 5, 2.5], kg: [25, 20, 15, 10, 5, 2.5, 1.25] };
+const PLATE_BARS = ["barbell", "ezbar", "dumbbells"];
+const plateKey = (w, u) => `${+w}${u}`;
+function parsePlate(k) { const m = /^([\d.]+)(lb|kg)$/.exec(k); return m ? { w: +m[1], u: m[2], lb: +m[1] * (m[2] === "kg" ? LB_PER_KG : 1) } : null; }
+function plateLoad() {
+  const l = S.settings.equip?.load || {};
+  let plates = l.plates;
+  if (!plates && l.pairs) plates = Object.fromEntries(Object.entries(l.pairs).map(([w, n]) => [plateKey(w, l.unit || "lb"), n]));   // first version: one unit for all
+  const bar = l.bar || {};
+  return { mode: l.mode || (Object.values(bar).some(v => v > 0) ? "plates" : "max"), unit: l.unit || unit(), bar, limit: l.limit || {}, plates: plates || {} };
+}
+function savePlates(L) { const { pairs, ...rest } = S.settings.equip?.load || {}; setEquip({ load: { ...rest, mode: L.mode, unit: L.unit, bar: L.bar, limit: L.limit, plates: L.plates } }); }
 function setEquip(patch) { S.settings = { ...S.settings, equip: { ...(S.settings.equip || {}), ...equip(), ...patch } }; }
 // The bar this exercise is loaded on (the first one you own that it can use), or null
 function plateBar(exId) {
@@ -130,37 +143,50 @@ function plateBar(exId) {
   for (const req of NEEDS[exId] || []) for (const t of req.split("|")) if (have.includes(t)) return PLATE_BARS.includes(t) ? t : null;
   return null;
 }
-// Bar weight and plate pairs for this exercise, once you've entered them; plate sizes in the plates' unit
+// Bar weight and the plates you can use for this exercise, in "Bars and plates" mode: sizes [{ w, u, lb, pairs }], heaviest first.
+// A pair of dumbbells spreads the plates over four sleeves, so two-dumbbell lifts get half your pairs per dumbbell (weights stay per hand).
 function plateKit(exId) {
   const tool = plateBar(exId), L = plateLoad();
-  if (!tool || !(L.bar[tool] > 0)) return null;
-  const toLb = L.unit === "kg" ? LB_PER_KG : 1;
-  const sizes = PLATE_SIZES[L.unit].map(w => ({ w, lb: w * toLb, pairs: L.pairs[w] || 0 })).filter(p => p.pairs > 0);
-  return sizes.length ? { tool, bar: L.bar[tool], unit: L.unit, toLb, sizes } : null;
+  if (L.mode !== "plates" || !tool || !(L.bar[tool] > 0)) return null;
+  if (!Object.values(L.plates).some(n => n > 0)) return null;   // no plates entered yet: keep the typed max
+  const two = tool === "dumbbells" && PER_HAND.has(exId);
+  const sizes = Object.entries(L.plates).map(([k, n]) => ({ ...parsePlate(k), pairs: two ? Math.floor(n / 2) : n })).filter(p => p.lb > 0 && p.pairs > 0).sort((a, b) => b.lb - a.lb);
+  return { tool, two, bar: L.bar[tool], limit: L.limit[tool] > 0 ? L.limit[tool] : Infinity, sizes };
 }
-// Every per-side load the plates can make, with the fewest plates for each (sizes are multiples of 1.25, so count in quarter units)
+// Heaviest load the bar, the plates and its limit allow
+function kitMax(kit) { return Math.min(kit.limit, +(kit.bar + 2 * kit.sizes.reduce((t, p) => t + p.lb * p.pairs, 0)).toFixed(2)); }
+// Every per-side load the plates can make (in hundredths of a lb), with the fewest plates for each
 function plateTable(kit) {
   const best = new Map([[0, []]]);
   for (const p of kit.sizes) {
-    const u = Math.round(p.w * 4);
+    const u = Math.round(p.lb * 100);
     for (const [s, list] of [...best.entries()].sort((a, b) => b[0] - a[0]))
       for (let n = 1; n <= p.pairs; n++) {
-        const k = s + u * n, cand = [...list, ...Array(n).fill(p.w)];
+        const k = s + u * n, cand = [...list, ...Array(n).fill(p)];
         if (!best.has(k) || best.get(k).length > cand.length) best.set(k, cand);
       }
   }
   return best;
 }
-// Plates per side for a total in lb: { side (heaviest first, plate unit), exact, below, above (nearest loadable totals in lb) }
+// Plates per side for a total in lb: { side (plates, heaviest first), exact, below, above (nearest loadable totals in lb) }.
+// Within half the display's rounding step counts as exact, so kg plates still match the lb number shown for them (and vice versa).
+function plateTol() { return unit() === "kg" ? .25 * LB_PER_KG : .25; }
 function platesFor(lb, kit) {
-  const tbl = plateTable(kit), side = (lb - kit.bar) / 2 / kit.toLb, want = Math.round(side * 4);
-  const tot = k => +(kit.bar + 2 * (k / 4) * kit.toLb).toFixed(2);
-  if (side < -.01) return { side: [], exact: false, below: null, above: kit.bar };
-  if (tbl.has(want) && Math.abs(want / 4 - side) < .02) return { side: [...tbl.get(want)].sort((a, b) => b - a), exact: true };
-  const keys = [...tbl.keys()].sort((a, b) => a - b), lo = keys.filter(k => k / 4 < side).pop(), hi = keys.find(k => k / 4 > side);
+  const PLATE_TOL = plateTol();
+  const tbl = plateTable(kit), tot = k => +(kit.bar + 2 * k / 100).toFixed(2);
+  if (lb < kit.bar - PLATE_TOL) return { side: [], exact: false, below: null, above: kit.bar };
+  const keys = [...tbl.keys()].filter(k => tot(k) <= kit.limit + PLATE_TOL).sort((a, b) => a - b);
+  const hit = keys.find(k => Math.abs(tot(k) - lb) <= PLATE_TOL);
+  if (hit != null) return { side: [...tbl.get(hit)].sort((a, b) => b.lb - a.lb), exact: true };
+  const lo = keys.filter(k => tot(k) < lb).pop(), hi = keys.find(k => tot(k) > lb);
   return { side: [], exact: false, below: lo != null ? tot(lo) : null, above: hi != null ? tot(hi) : null };
 }
-function plateTxt(side) { return side.length ? side.map(w => String(+w)).join(" + ") : "empty bar"; }
+// "25 + 10 + 2.5 lb", or each plate's unit when they're mixed: "20 kg + 10 lb"
+function plateTxt(side) {
+  if (!side.length) return "empty bar";
+  const units = new Set(side.map(p => p.u));
+  return units.size > 1 ? side.map(p => `${+p.w} ${p.u}`).join(" + ") : `${side.map(p => +p.w).join(" + ")} ${side[0].u}`;
+}
 // Heaviest loadable weight at or under lb (plates when known, else the exercise's step)
 function loadableAtMost(lb, exId, kit) {
   if (kit) { if (lb < kit.bar) return null; const p = platesFor(lb, kit); return p.exact ? lb : p.below; }
@@ -2380,14 +2406,14 @@ function renderEntry(e, i, day, entries, actx, auto) {
   const kit = plateKit(e.ex);
   const plateLine = (st, j) => {
     if (!kit || !(st.w > 0)) return "";
-    const P = platesFor(st.w, kit), pu = kit.unit;
-    if (P.exact) return `<div class="plates small" aria-label="Plates per side: ${plateTxt(P.side)} ${pu}">${P.side.length ? `<span class="pbar" aria-hidden="true">${P.side.map(w => `<i style="height:${Math.round(10 + 18 * Math.sqrt(w / PLATE_SIZES[pu][0]))}px"></i>`).join("")}</span>` : ""}<span class="muted">Per side</span> <b class="num">${plateTxt(P.side)}</b>${P.side.length ? ` <span class="muted">${pu}</span>` : ""}</div>`;
+    const P = platesFor(st.w, kit);
+    if (P.exact) return `<div class="plates small" aria-label="Plates per side: ${plateTxt(P.side)}">${P.side.length ? `<span class="pbar" aria-hidden="true">${P.side.map(p => `<i style="height:${Math.round(10 + 18 * Math.sqrt(Math.min(1, p.lb / 45)))}px"></i>`).join("")}</span>` : ""}<span class="muted">${kit.two ? "Each dumbbell, per side" : "Per side"}</span> <b class="num">${plateTxt(P.side)}</b></div>`;
     const opts = [P.below, P.above].filter(x => x != null);
     return `<div class="plates small warn"><span>Your plates can't make ${fmtW(st.w)}.</span>${opts.map(w => ` <button class="chipbtn" data-act="wset" data-i="${i}" data-j="${j}" data-w="${w}">${fmtW(w)}</button>`).join("")}</div>`;
   };
   // Warm-up ramp before the first working set; tap a step to cross it off (not logged as a set)
   const wus = started ? [] : warmups(e.ex, e.sets[0]?.w || 0);
-  const wuRow = wus.length ? `<div class="wu"><span class="label">Warm-up</span>${wus.map((x, k) => `<button class="wuchip ${(e.wu || []).includes(k) ? "done" : ""}" data-act="wu" data-i="${i}" data-k="${k}" aria-pressed="${(e.wu || []).includes(k)}"><b class="num">${x.bar ? "Bar" : fmtW(x.w)} × ${x.r}</b>${x.side && !x.bar ? `<span class="num">${plateTxt(x.side)}</span>` : ""}</button>`).join("")}</div>` : "";
+  const wuRow = wus.length ? `<div class="wu"><span class="label">Warm-up</span>${wus.map((x, k) => `<button class="wuchip ${(e.wu || []).includes(k) ? "done" : ""}" data-act="wu" data-i="${i}" data-k="${k}" aria-pressed="${(e.wu || []).includes(k)}"><b class="num">${x.bar ? (kit?.tool === "dumbbells" ? "Handle" : "Bar") : fmtW(x.w)} × ${x.r}</b>${x.side && !x.bar ? `<span class="num">${plateTxt(x.side)}</span>` : ""}</button>`).join("")}</div>` : "";
   const first = e.sets.findIndex(s => !s.done);
   const ed = S.setEdit?.k === key && e.sets[S.setEdit.j] && !e.sets[S.setEdit.j].done ? S.setEdit.j : first;
   const rows = e.sets.map((s, j) => s.done ? `
@@ -3025,17 +3051,26 @@ function renderSettings() {
       <h2>Your equipment</h2>
       <p class="small muted" style="margin:0">Tap what you own. When you start a routine, exercises that need missing gear are swapped for the closest one you can do. At a max load, progress moves to more reps and then slower reps, instead of more weight.</p>
       <div class="mgrid">${Object.entries(EQUIP).map(([k, n]) => `<button type="button" data-act="eq" data-k="${k}" data-w="${eq.have.includes(k) ? 1 : 0}" aria-pressed="${eq.have.includes(k)}">${n}</button>`).join("")}</div>
-      ${LOADABLE.filter(k => eq.have.includes(k)).map(k => `<label class="eqmax" for="eqmax-${k}"><span>${EQUIP[k]}: heaviest you can load${k === "dumbbells" || k === "kettlebell" ? " (each)" : ", bar included"}</span>
-        <span class="stepper" style="display:inline-flex;width:auto"><input id="eqmax-${k}" inputmode="decimal" value="${eq.max[k] ? toDisp(eq.max[k]) : ""}" placeholder="no cap" style="width:72px"><span class="u">${unit()}</span></span></label>`).join("")}
     </section>
-    ${PLATE_BARS.some(k => eq.have.includes(k)) ? (() => { const L = plateLoad(); return `<section class="block">
-      <h2>Bars and plates</h2>
-      <p class="small muted" style="margin:0">With these filled in, each set shows the plates to put on each side, and main lifts get a warm-up ramp you can actually load.</p>
-      ${PLATE_BARS.filter(k => eq.have.includes(k)).map(k => `<label class="eqmax" for="bar-${k}"><span>${EQUIP[k]} weight, empty</span>
-        <span class="stepper" style="display:inline-flex;width:auto"><input id="bar-${k}" inputmode="decimal" value="${L.bar[k] ? toDisp(L.bar[k]) : ""}" placeholder="?" style="width:72px"><span class="u">${unit()}</span></span></label>`).join("")}
-      <div class="list" style="margin-top:8px"><div class="row"><div class="l"><b>Plates</b><div class="small muted">Pairs you own (one for each side)</div></div>
-        <div class="seg" role="group" aria-label="Plate unit" style="margin:0">${["lb", "kg"].map(u => `<button data-act="plateunit" data-v="${u}" aria-pressed="${L.unit === u}">${u}</button>`).join("")}</div></div></div>
-      <div class="plategrid">${PLATE_SIZES[L.unit].map(w => { const n = L.pairs[w] || 0; return `<div class="pg"><span class="num"><b>${w}</b> ${L.unit}</span><span class="stepper" style="display:inline-flex;width:auto"><button data-act="pairs" data-w="${w}" data-d="-1" aria-label="One pair fewer of ${w} ${L.unit}" ${n ? "" : "disabled"}>−</button><span class="num" style="min-width:24px;text-align:center">${n}</span><button data-act="pairs" data-w="${w}" data-d="1" aria-label="One more pair of ${w} ${L.unit}">+</button></span></div>`; }).join("")}</div>
+    ${LOADABLE.some(k => eq.have.includes(k)) ? (() => { const L = plateLoad(), pm = L.mode === "plates", pb = PLATE_BARS.filter(k => eq.have.includes(k));
+      const maxRow = k => `<label class="eqmax" for="eqmax-${k}"><span>${EQUIP[k]}: heaviest you can load${k === "dumbbells" || k === "kettlebell" ? " (each)" : ", bar included"}</span>
+        <span class="stepper" style="display:inline-flex;width:auto"><input id="eqmax-${k}" inputmode="decimal" value="${eq.max[k] ? toDisp(eq.max[k]) : ""}" placeholder="no cap" style="width:72px"><span class="u">${unit()}</span></span></label>`;
+      const wIn = (id, v, ph, lbl) => `<label class="eqin"><span class="small muted">${lbl}</span><span class="stepper" style="display:inline-flex;width:auto"><input id="${id}" inputmode="decimal" value="${v > 0 ? toDisp(v) : ""}" placeholder="${ph}" style="width:64px"><span class="u">${unit()}</span></span></label>`;
+      const heaviest = k => { if (!(L.bar[k] > 0)) return k === "dumbbells" ? "Fixed dumbbells: leave the handle blank and type the max below." : "Enter the empty weight to work out the heaviest load.";
+        const ex = { barbell: "deadlift", ezbar: "bb_curl", dumbbells: "db_curl" }[k], one = k === "dumbbells" ? plateKit("db_row") : null, kt = plateKit(ex);
+        const m = x => `<b class="num">${fmtW(kitMax(x))}</b>${kitMax(x) >= x.limit ? " (limit)" : ""}`;
+        return kt ? `Heaviest: ${m(kt)}${one ? ` a hand with two, ${m(one)} with one` : ""}` : ""; };
+      return `<section class="block">
+      <h2>Loads</h2>
+      <div class="seg" role="group" aria-label="How to set loads">${[["max", "Just the max"], ["plates", "Bars and plates"]].map(([k, n]) => `<button data-act="loadmode" data-v="${k}" aria-pressed="${L.mode === k}">${n}</button>`).join("")}</div>
+      <p class="small muted" style="margin:8px 0 0">${pm ? "Enter each bar's empty weight and the plates you own: the heaviest load is worked out, each set shows its plates per side, and warm-ups use weights you can load. A limit is optional (a bar's rating, or how much fits on short dumbbell sleeves)." : "Type the heaviest weight you can put on each. Switch to Bars and plates to have it worked out and to see plates for each set."}</p>
+      ${pm ? `${pb.map(k => `<div class="eqbar"><b>${k === "dumbbells" ? "Dumbbell handle" : EQUIP[k]}</b><div class="eqins">${wIn(`bar-${k}`, L.bar[k], k === "dumbbells" ? "fixed" : "?", "Empty")}${wIn(`lim-${k}`, L.limit[k], "none", "Limit")}</div><div class="small muted">${heaviest(k)}</div></div>`).join("")}
+        ${LOADABLE.filter(k => eq.have.includes(k) && (!PLATE_BARS.includes(k) || !(L.bar[k] > 0))).map(maxRow).join("")}
+      <div class="list" style="margin-top:8px"><div class="row"><div class="l"><b>Plates</b><div class="small muted">Pairs you own, in lb, kg or both</div></div>
+        <div class="seg" role="group" aria-label="Standard sizes to list" style="margin:0">${["lb", "kg"].map(u => `<button data-act="plateunit" data-v="${u}" aria-pressed="${L.unit === u}">${u}</button>`).join("")}</div></div></div>
+      <div class="plategrid">${[...new Set([...PLATE_SIZES[L.unit].map(w => plateKey(w, L.unit)), ...Object.keys(L.plates).filter(k => L.plates[k] > 0)])].map(parsePlate).filter(Boolean).sort((a, b) => b.lb - a.lb).map(p => { const k = plateKey(p.w, p.u), n = L.plates[k] || 0; return `<div class="pg"><span class="num"><b>${p.w}</b> ${p.u}</span><span class="stepper" style="display:inline-flex;width:auto"><button data-act="pairs" data-k="${k}" data-d="-1" aria-label="One pair fewer of ${p.w} ${p.u}" ${n ? "" : "disabled"}>−</button><span class="num" style="min-width:24px;text-align:center">${n}</span><button data-act="pairs" data-k="${k}" data-d="1" aria-label="One more pair of ${p.w} ${p.u}">+</button></span></div>`; }).join("")}</div>
+      ${fold("plateadd", "+ Other size", `<div class="plateadd"><input id="pa-w" inputmode="decimal" placeholder="Size" aria-label="Plate size" style="width:80px"><select id="pa-u" aria-label="Plate unit">${["lb", "kg"].map(u => `<option ${u === L.unit ? "selected" : ""}>${u}</option>`).join("")}</select><button class="btn" data-act="plateadd">Add a pair</button></div>`)}`
+      : LOADABLE.filter(k => eq.have.includes(k)).map(maxRow).join("")}
       <div class="list" style="margin-top:8px"><div class="row"><div class="l"><b>Warm-up sets</b><div class="small muted">A short ramp before squats, hinges, presses and rows. Not logged as sets. ${srcBtn("warmup")}</div></div>
         <button class="chipbtn ${S.settings.warmups === false ? "" : "primary"}" data-act="warmups" aria-pressed="${S.settings.warmups !== false}">${S.settings.warmups === false ? "Off" : "On"}</button></div></div>
     </section>`; })() : ""}`;
@@ -3603,8 +3638,11 @@ document.addEventListener("click", async ev => {
     case "weekedit": S.weekEdit = !S.weekEdit; render(); break;
     case "tipok": case "tipsreset": S.settings = { ...S.settings, tipsSeen: act === "tipsreset" ? [] : [...new Set([...(S.settings.tipsSeen || []), b.dataset.k])] }; render(); if (act === "tipsreset") toast("Tips will show again"); await saveDoc("settings/main", S.settings); break;
     case "rmset": mutate(() => { E().sets.pop(); }); break;
-    case "plateunit": { const L = plateLoad(); if (L.unit !== b.dataset.v) setEquip({ load: { ...L, unit: b.dataset.v, pairs: {} } }); render(); await saveDoc("settings/main", S.settings); break; }
-    case "pairs": { const L = plateLoad(), w = b.dataset.w, n = Math.max(0, (L.pairs[w] || 0) + +b.dataset.d); setEquip({ load: { ...L, pairs: { ...L.pairs, [w]: n } } }); render(); await saveDoc("settings/main", S.settings); break; }
+    case "loadmode": savePlates({ ...plateLoad(), mode: b.dataset.v }); render(); await saveDoc("settings/main", S.settings); break;
+    case "plateunit": { const L = plateLoad(); savePlates({ ...L, unit: b.dataset.v }); render(); await saveDoc("settings/main", S.settings); break; }
+    case "pairs": { const L = plateLoad(), k = b.dataset.k, n = Math.max(0, (L.plates[k] || 0) + +b.dataset.d), plates = { ...L.plates, [k]: n }; if (!n) delete plates[k]; savePlates({ ...L, plates }); render(); await saveDoc("settings/main", S.settings); break; }
+    case "plateadd": { const w = parseFloat($("#pa-w").value), u = $("#pa-u").value; if (!(w > 0 && w <= 200)) { toast("Enter a plate size"); break; }
+      const L = plateLoad(), k = plateKey(+w.toFixed(2), u); savePlates({ ...L, plates: { ...L.plates, [k]: (L.plates[k] || 0) + 1 } }); render(); toast(`Added a pair of ${+w.toFixed(2)} ${u}`); await saveDoc("settings/main", S.settings); break; }
     case "warmups": S.settings = { ...S.settings, warmups: S.settings.warmups === false }; render(); await saveDoc("settings/main", S.settings); break;
     case "wu": mutate(() => { const k = +b.dataset.k, w = E().wu || []; E().wu = w.includes(k) ? w.filter(x => x !== k) : [...w, k]; }); break;
     case "wset": mutate(() => { const sets = E().sets, old = sets[j].w, w = +b.dataset.w; for (let n = j; n < sets.length; n++) if (!sets[n].done && (n === j || sets[n].w === old)) sets[n].w = w; }); break;
@@ -3677,8 +3715,8 @@ document.addEventListener("change", ev => {
   if (t.dataset.skipnote) { const key = t.dataset.skipnote, v = t.value.trim(); setPrefs(p => { if (p.skip[key]) { if (v) p.skip[key].note = v; else delete p.skip[key].note; } }); }
   if (t.dataset.re && S.rEdit) { const it = S.rEdit.items[+t.dataset.k], v = parseInt(t.value) || 0;
     if (t.dataset.re === "r") it.r = Math.max(1, v); else if (v > 0) it.rHi = v; else delete it.rHi; }
-  if (t.id?.startsWith("bar-")) {
-    const L = plateLoad(); setEquip({ load: { ...L, bar: { ...L.bar, [t.id.slice(4)]: t.value.trim() === "" ? 0 : fromDisp(t.value) } } });
+  if (t.id?.startsWith("bar-") || t.id?.startsWith("lim-")) {
+    const L = plateLoad(), f = t.id.startsWith("bar-") ? "bar" : "limit"; savePlates({ ...L, [f]: { ...L[f], [t.id.slice(4)]: t.value.trim() === "" ? 0 : fromDisp(t.value) } });
     render(); saveDoc("settings/main", S.settings);
   }
   if (t.id?.startsWith("eqmax-")) {

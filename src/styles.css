@@ -575,3 +575,4 @@ section.block.wktop { margin-top: 0; }
 .row .seg { flex: none; }
 .row .seg button { padding: 6px 12px; }
 .plategrid .pg > span:first-child { white-space: nowrap; }
+.plateadd { display: flex; gap: 8px; align-items: center; margin-top: 8px; }

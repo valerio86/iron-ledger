@@ -60,6 +60,7 @@ function run() {
   test("plates: none shown until the bar weight and plates are entered", () => {
     scene({ settings: bigGear }, () => eq(plateKit("deadlift"), null));
     scene({ settings: plateGear({}) }, () => eq(plateKit("deadlift"), null));
+    scene({ settings: bigGear }, () => eq(plateLoad().mode, "max"));
     scene({ settings: plateGear({ 10: 2 }) }, () => { eq(plateKit("deadlift").bar, 20); eq(plateKit("db_curl"), null); eq(plateKit("pullup"), null); });
   });
   test("plates: fewest plates per side, heaviest first", () => scene({ settings: plateGear({ 25: 1, 10: 2, 5: 2, 2.5: 1 }) }, () => {
@@ -70,6 +71,24 @@ function run() {
   test("plates: a weight the plates can't make offers the nearest two", () => scene({ settings: plateGear({ 10: 2, 5: 1 }) }, () => {
     const p = platesFor(47.5, plateKit("deadlift")); ok(!p.exact); eq([p.below, p.above], [40, 50]);
     eq(platesFor(200, plateKit("deadlift")).below, 70);
+  }));
+  test("loads: Just the max ignores the plates", () => scene({ settings: plateGear({ 10: 2 }) }, () => {
+    eq(plateLoad().mode, "plates", "defaults to plates once a bar weight is in");
+    S.settings.equip.load.mode = "max"; eq(plateKit("deadlift"), null); eq(capLb("deadlift"), 150); eq(warmups("deadlift", 100).map(x => x.w), [40, 60, 80]);
+  }));
+  test("loads: the max is worked out from bar and plates, capped by the limit", () => scene({ settings: plateGear({ 45: 1, 25: 1, 10: 2 }) }, () => {
+    eq(capLb("deadlift"), 20 + 2 * (45 + 25 + 20));
+    S.settings.equip.load.limit = { barbell: 150 }; eq(capLb("deadlift"), 150);
+    const P = platesFor(160, plateKit("deadlift")); ok(!P.exact); eq(P.above, null);
+  }));
+  test("loads: no plates entered keeps the typed max", () => scene({ settings: plateGear({}) }, () => eq(capLb("deadlift"), 150)));
+  test("dumbbells: loadable handles; two-dumbbell lifts get half the pairs each", () => scene({ settings: plateGear({ 10: 2, 5: 1, 2.5: 2 }, 20, {}) }, () => {
+    S.settings.equip.load.bar.dumbbells = 5;
+    const two = plateKit("db_curl"), one = plateKit("db_row");
+    ok(two.two && !one.two);
+    eq(capLb("db_curl"), 5 + 2 * (10 + 2.5)); eq(capLb("db_row"), 5 + 2 * (20 + 5 + 5));
+    eq(ws(platesFor(25, two).side), [10]); eq(ws(platesFor(45, one).side), [10, 10]);
+    S.settings.equip.load.bar.dumbbells = 0; eq(plateKit("db_curl"), null); eq(capLb("db_curl"), 50, "fixed dumbbells keep the typed max");
   }));
   test("plates: the EZ bar uses its own weight", () => scene({ settings: plateGear({ 10: 2 }) }, () => eq(plateKit("bb_curl").bar, 15)));
   test("plates: kg plates", () => scene({ settings: plateGear({ "20kg": 1, "1.25kg": 1 }, 20 * LB_PER_KG) }, () => {

@@ -1255,6 +1255,61 @@ function weightTrend(from, to) {
   for (let i = 1; i < n; i++) if (pts[i][0] - pts[i - 1][0] > Math.max(7, gap?.days || 0)) gap = { days: pts[i][0] - pts[i - 1][0], from: addDays(from, pts[i - 1][0] + 1), to: addDays(from, pts[i][0] - 1) };
   return { n, span: pts[n - 1][0] - pts[0][0], perWk: slope * 7, now: my + slope * (daysBetween(from, to) - mx), from, gap };
 }
+/* Tape measurements (body/<day>.tape, inches). On a lean bulk with no food log, the scale can't tell muscle from fat and its
+   body-fat % mostly follows hydration; a flat waist while weight and arms go up says the gain is mostly muscle. */
+const TAPE_NAMES = { waist: "Waist", neck: "Neck", arm: "Upper arm", chest: "Chest", thigh: "Thigh", hips: "Hips" };
+const TAPE_HOW = { waist: "Level with your navel, relaxed, after breathing out", neck: "Just below the Adam's apple", arm: "Widest point, flexed",
+  chest: "Nipple line, under the armpits, relaxed", thigh: "Widest point, standing on both feet", hips: "Widest point of the buttocks, feet together" };
+const TAPE_RANGE = { waist: [18, 70], neck: [9, 30], arm: [6, 30], chest: [20, 70], thigh: [10, 45], hips: [20, 80] };
+const GROW = ["arm", "chest", "thigh"];        // where muscle shows up
+const WAIST_MAX_MO = .25;                      // in/month: faster than this on a lean bulk is mostly fat
+const TAPE_EVERY = 14;
+// Hips only count toward the women's estimate, so they're only asked for with women's standards (or once logged)
+function tapeFields() { const f = S.settings.stdSex === "f" || Object.values(S.tape || {}).some(t => t.hips) ? Object.keys(TAPE_NAMES) : Object.keys(TAPE_NAMES).filter(k => k !== "hips");
+  return f.map(k => [k, TAPE_NAMES[k], TAPE_HOW[k]]); }
+function tapeUnit() { return unit() === "kg" ? "cm" : "in"; }
+function toTape(inches) { if (inches == null) return ""; const v = unit() === "kg" ? inches * 2.54 : inches; return +v.toFixed(1); }
+function fromTape(v) { const n = parseFloat(String(v).replace(",", ".")); if (!isFinite(n)) return NaN; return +(unit() === "kg" ? n / 2.54 : n).toFixed(2); }
+function fmtTapeDelta(inches) { const v = toTape(Math.abs(inches)); return `${inches >= 0 ? "+" : "−"}${v} ${tapeUnit()}`; }
+function lastTape(day) { const ks = Object.keys(S.tape || {}).filter(k => k <= day).sort(); return ks.length ? { day: ks[ks.length - 1], ...S.tape[ks[ks.length - 1]] } : null; }
+function tapeSeries(k, to = "9999-12-31", from = "") { return Object.keys(S.tape || {}).sort().filter(d => d >= from && d <= to && S.tape[d][k]).map(d => ({ day: d, v: S.tape[d][k] })); }
+// US Navy circumference method (Hodgdon & Beckett 1984), inches. About ±3–4 points against DEXA for one person; steadier as a trend
+function navyFat(t, heightIn, sex) {
+  if (!t || !heightIn || !t.waist || !t.neck || !sex) return null;
+  const v = sex === "f" ? (t.hips && t.waist + t.hips - t.neck > 0 ? 163.205 * Math.log10(t.waist + t.hips - t.neck) - 97.684 * Math.log10(heightIn) - 78.387 : null)
+    : t.waist - t.neck > 0 ? 86.010 * Math.log10(t.waist - t.neck) - 70.041 * Math.log10(heightIn) + 36.76 : null;
+  return v == null || !isFinite(v) ? null : Math.max(2, Math.min(60, +v.toFixed(1)));
+}
+function navySeries(to) { return Object.keys(S.tape || {}).sort().filter(d => !to || d <= to).map(d => ({ day: d, v: navyFat(S.tape[d], S.settings.heightIn, S.settings.stdSex) })).filter(p => p.v != null); }
+// Least-squares change per month over the last 8 weeks; needs 3 measurements over 3+ weeks
+function tapeTrend(k, day, days = 56) {
+  const pts = tapeSeries(k, day, addDays(day, -days)).map(p => [daysBetween(day, p.day), p.v]), n = pts.length;
+  if (n < 3) return { n, span: 0 };
+  const span = pts[n - 1][0] - pts[0][0]; if (span < 21) return { n, span };
+  const mx = pts.reduce((a, p) => a + p[0], 0) / n, my = pts.reduce((a, p) => a + p[1], 0) / n;
+  const slope = pts.reduce((a, p) => a + (p[0] - mx) * (p[1] - my), 0) / pts.reduce((a, p) => a + (p[0] - mx) ** 2, 0);
+  return { n, span, perMo: slope * 30.4 };
+}
+// Latest against the measurement closest to 4 weeks earlier (at least 3 weeks back)
+function tapeChange(k, day) {
+  const s = tapeSeries(k, day); if (s.length < 2) return null;
+  const last = s[s.length - 1], back = s.filter(p => daysBetween(p.day, last.day) >= 21);
+  if (!back.length) return null;
+  const ref = back.reduce((a, p) => Math.abs(daysBetween(p.day, last.day) - 28) < Math.abs(daysBetween(a.day, last.day) - 28) ? p : a);
+  return { d: last.v - ref.v, from: ref.day, to: last.day, now: last.v };
+}
+// What the tape says about the gain, in one line
+function tapeRead(day) {
+  const w = tapeChange("waist", day); if (!w) return null;
+  const wt = tapeTrend("waist", day), rate = wt.perMo ?? w.d / daysBetween(w.from, w.to) * 30.4;
+  const grew = GROW.map(k => [k, tapeChange(k, day)]).filter(([, c]) => c && c.d >= .25);
+  const grewTxt = grew.map(([k, c]) => `${TAPE_NAMES[k].toLowerCase()} ${fmtTapeDelta(c.d)}`).join(", ");
+  const since = fmtDay(w.from, { month: "short", day: "numeric" });
+  if (rate > WAIST_MAX_MO) return { lvl: "warn", pill: "Waist rising", t: `Waist ${fmtTapeDelta(w.d)} since ${since}${grewTxt ? ` (${grewTxt})` : ""}. Faster than about ${fmtTapeDelta(WAIST_MAX_MO)} a month means more of the gain is fat than a lean bulk wants.` };
+  if (rate < -WAIST_MAX_MO) return { lvl: "good", pill: "Leaning out", t: `Waist ${fmtTapeDelta(w.d)} since ${since}${grewTxt ? ` while ${grewTxt}` : ""}: you're leaning out.` };
+  if (grew.length) return { lvl: "good", pill: "Mostly muscle", t: `Waist about flat since ${since} (${fmtTapeDelta(w.d)}) while ${grewTxt}: the gain looks like mostly muscle.` };
+  return { lvl: "neutral", pill: "Waist steady", t: `Waist about flat since ${since} (${fmtTapeDelta(w.d)}). Arms and chest are slow to show on a tape; give them a couple more months.` };
+}
 function fuel(day) {
   const N = nutri(), G = GOALS[N.goal], bw = bwLb(day);
   const kcal = N.kcal || round50(bw * (S.settings.nutrition?.perLb || KCAL_PER_LB) + G.add);
@@ -1265,14 +1320,18 @@ function fuel(day) {
   const recent = Object.keys(S.health).filter(k => k > addDays(day, -14) && k <= day && S.health[k].weightLb).length;
   const nextCheck = last ? addDays(last.day, 14) : null, due = !nextCheck || day >= nextCheck;
   const enough = tr.n >= 6 && tr.span >= 14;
-  const status = !enough ? "unknown" : !due ? "settling" : tr.perWk < G.lo ? "low" : tr.perWk > G.hi + (N.goal === "bulk" ? .25 : 0) ? "high" : "ok";
+  let status = !enough ? "unknown" : !due ? "settling" : tr.perWk < G.lo ? "low" : tr.perWk > G.hi + (N.goal === "bulk" ? .25 : 0) ? "high" : "ok";
+  // The waist backs up the scale: on a lean bulk with weight on target, a waist climbing fast still means trim a little,
+  // and with weight gain too slow, a climbing waist says not to add food
+  const waist = N.goal === "bulk" ? tapeTrend("waist", day) : { n: 0 }, waistUp = waist.perMo > WAIST_MAX_MO;
   let nudge = null;
-  if (due && (status === "low" || status === "high")) {
+  if (due && status === "ok" && waistUp) { status = "waist"; nudge = { delta: -100 }; }
+  else if (due && (status === "low" && !waistUp || status === "high")) {
     // 0.1 lb/week ≈ 70 kcal/day in practice (the textbook 50, plus what the body burns off when fed more)
     const raw = ((G.lo + G.hi) / 2 - tr.perWk) * 700;
     nudge = { delta: Math.sign(raw) * Math.min(250, Math.max(100, round50(Math.abs(raw)))) };
   }
-  return { N, G, bw, kcal, prot, tr, recent, status, nudge, last, nextCheck };
+  return { N, G, bw, kcal, prot, tr, recent, status, nudge, last, nextCheck, waist, waistHold: due && status === "low" && waistUp };
 }
 function fuelPick(list, day, n = 2) { const i = daysBetween("2026-01-01", day) % list.length; return [...list, ...list].slice(i, i + n); }
 function agoText(k, day) { const n = daysBetween(k, day); return n === 1 ? "yesterday" : `${n} days ago`; }
@@ -1769,10 +1828,17 @@ function coach(day) {
   const F = fuel(day);
   if (F.nudge && isToday) {
     const more = F.nudge.delta > 0, ideas = fuelPick(more ? MORE_FOOD : LESS_FOOD, day);
-    msgs.push({ k: "ask", lvl: more ? "warn" : "info", t: `<b>${more ? "Eat" : "Trim"} about ${Math.abs(F.nudge.delta)} kcal${more ? " more" : ""} a day.</b> Weight is ${fmtRate(F.tr.perWk)} over the last ${F.tr.span} days; a ${F.G.n.toLowerCase()} aims for ${F.G.r} lb/week${F.status === "high" && F.N.goal === "bulk" ? ", and faster than that is mostly fat" : ""}. For example: ${ideas.join(", or ")}. Keep it up for 2 weeks and the next check will show whether it worked.
+    if (F.status === "waist") msgs.push({ k: "ask", lvl: "info", t: `<b>Trim about ${Math.abs(F.nudge.delta)} kcal a day.</b> Weight is on target (${fmtRate(F.tr.perWk)}), but your waist is up about ${fmtTapeDelta(F.waist.perMo)} a month over ${F.waist.n} measurements. On a lean bulk it should stay close to flat, so some of the gain is going to fat. For example: ${ideas.join(", or ")}. ${srcBtn("tape")}
+      <div class="swaps"><button class="chipbtn" data-act="fuelack" data-n="${F.nudge.delta}">Got it</button></div>` });
+    else msgs.push({ k: "ask", lvl: more ? "warn" : "info", t: `<b>${more ? "Eat" : "Trim"} about ${Math.abs(F.nudge.delta)} kcal${more ? " more" : ""} a day.</b> Weight is ${fmtRate(F.tr.perWk)} over the last ${F.tr.span} days; a ${F.G.n.toLowerCase()} aims for ${F.G.r} lb/week${F.status === "high" && F.N.goal === "bulk" ? ", and faster than that is mostly fat" : ""}. For example: ${ideas.join(", or ")}. Keep it up for 2 weeks and the next check will show whether it worked.
       <div class="swaps"><button class="chipbtn" data-act="fuelack" data-n="${F.nudge.delta}">Got it</button></div>` });
   } else if (F.recent < 4 && Object.values(S.health).some(x => x.weightLb))
     msgs.push({ k: "week", id: "weighins", lvl: "info", t: `Only <b>${F.recent} weigh-in${F.recent === 1 ? "" : "s"}</b> in the last 2 weeks. The food advice runs on your weight trend, so step on the scale most mornings (after the bathroom, before eating or drinking).` });
+  // Tape: a reminder every 2 weeks, once you've measured at least once
+  const lt = lastTape(day);
+  if (lt && isToday && daysBetween(lt.day, day) >= TAPE_EVERY)
+    msgs.push({ k: "week", id: "tape", lvl: "info", t: `Time to measure: last tape was ${agoText(lt.day, day)}. Waist first; it's what tells muscle from fat on a bulk.
+      <div class="swaps"><button class="chipbtn primary" data-act="tape-open">Measure</button></div>` });
 
   // 0. Garmin recovery signals for this morning
   const h = healthOn(day);
@@ -2189,7 +2255,7 @@ function openBody(focusNote) {
 // One door for everything you might log that isn't a set
 function openLog() {
   const row = (act, t, d, extra = "") => `<button class="exrow" data-act="${act}" ${extra}><div class="l"><div>${t}</div><div class="small muted">${d}</div></div><span class="chev" aria-hidden="true">›</span></button>`;
-  $("#sheet").innerHTML = sheetHtml("Log", row("cl-open", "Cardio", "A run, row, ride or walk") + row("wt-open", "Weigh-in", "Weight and body fat") + row("bodysheet", "Note", "Aches, sleep, how you feel. The plan adjusts.", `data-focus="1"`));
+  $("#sheet").innerHTML = sheetHtml("Log", row("cl-open", "Cardio", "A run, row, ride or walk") + row("wt-open", "Weigh-in", "Weight and body fat") + row("tape-open", "Measurements", "Waist, neck, arm, chest, thigh. Every 2 weeks") + row("bodysheet", "Note", "Aches, sleep, how you feel. The plan adjusts.", `data-focus="1"`));
 }
 // The plan for the day being shown: today's comes from the coach, later days from the look-ahead
 function planFor(day, c = coach(day)) {
@@ -2583,9 +2649,11 @@ function renderProgress() {
       <div class="plifts">${ts.slice(0, 4).map(t => `<div class="plift"><span class="nm">${esc(t.ex.name)}</span>${spark(t.hl.slice(-10).map(r => r.score))}<span class="num small">${t.trend ? `${t.trend.arrow} ${t.trend.pct}%` : "—"}</span></div>`).join("")}</div>`;
   // Body: the weight trend against the goal
   const wts = Object.keys(S.health).sort().filter(k => S.health[k].weightLb && k >= since).map(k => S.health[k].weightLb), F = fuel(today);
-  const st = { ok: ["good", "On track"], low: ["warn", "Below target"], high: ["warn", "Above target"], unknown: ["neutral", "Need more weigh-ins"], settling: ["neutral", "Too soon to judge"] }[F.status];
+  const ws = tapeSeries("waist", today, addDays(today, -112));
+  const waistLine = ws.length ? `<div class="plift"><span class="nm"><span class="small muted">Waist</span> <span class="num">${toTape(ws[ws.length - 1].v)} ${tapeUnit()}</span></span>${ws.length > 1 ? spark(ws.map(p => p.v)) : "<span></span>"}<span class="small muted">16 wk</span></div>` : "";
+  const st = { ok: ["good", "On track"], low: ["warn", "Below target"], high: ["warn", "Above target"], unknown: ["neutral", "Need more weigh-ins"], settling: ["neutral", "Too soon to judge"], waist: ["warn", "Waist rising"] }[F.status];
   const body = wts.length ? `<div class="pv">${F.status !== "unknown" ? `<b class="num">${fmtRate(F.tr.perWk)}</b> ` : ""}<span class="pill ${st[0]}">${st[1]}</span> <span class="small muted">${esc(F.G.n.toLowerCase())}, goal ${F.G.r} lb/wk</span></div>
-      <div class="plift"><span class="nm num">${fmtW(wts[wts.length - 1])}</span>${spark(wts)}<span class="small muted">8 wk</span></div>`
+      <div class="plift"><span class="nm num">${fmtW(wts[wts.length - 1])}</span>${spark(wts)}<span class="small muted">8 wk</span></div>${waistLine}`
     : `<div class="pv muted">${Object.keys(S.health).length ? "No weigh-ins yet. Log one from + Log on Today." : "Weight, body fat and recovery show up here once you log a weigh-in or connect Garmin."}</div>`;
   // Volume: this week's working sets against your usual
   const L = weeklyLoad(today);
@@ -2845,6 +2913,7 @@ function renderBody() {
   const w7 = avg(wts, addDays(today, -6)), w28 = avg(wts.filter(p => p.day < addDays(today, -6)), addDays(today, -34));
   if (wts.length) S._bodyCharts.push(["chart-wt", { pts: wts, fmt: v => toDisp(v), unit: unit() }]);
   if (fat.length) S._bodyCharts.push(["chart-fat", { pts: fat, fmt: v => v.toFixed(1), unit: "%" }]);
+  const navy = navySeries(today), navyNow = navy.length ? navy[navy.length - 1] : null;
   const rows = ks.slice(-7).reverse().map(k => { const x = S.health[k];
     return `<tr><td>${fmtDay(k, { weekday: "short", day: "numeric" })}</td><td>${x.readiness ?? "—"}</td><td>${x.sleepScore ?? "—"}</td><td>${x.hrv ?? "—"}</td><td>${x.bodyBatteryWake ?? x.bodyBatteryHigh ?? "—"}</td><td>${x.restingHr ?? "—"}</td></tr>`; }).join("");
   return `
@@ -2853,19 +2922,44 @@ function renderBody() {
       <div class="statrow">
         <div class="stat"><div class="label">Weight · 7d avg</div><div class="v">${w7 ? toDisp(w7) : "—"}<span class="small muted"> ${unit()}</span></div></div>
         <div class="stat"><div class="label">vs prior 4 wk</div><div class="v">${w7 && w28 ? `${w7 >= w28 ? "+" : "−"}${toDisp(Math.abs(w7 - w28))}` : "—"}</div></div>
-        <div class="stat"><div class="label">Body fat${S.settings.goalFat ? ` · goal ${esc(S.settings.goalFat)}` : ""}</div><div class="v">${fat.length ? fat[fat.length - 1].v.toFixed(1) : "—"}<span class="small muted"> %</span></div></div>
+        <div class="stat"><div class="label">Body fat · ${navyNow ? "tape" : "scale"}${S.settings.goalFat ? ` · goal ${esc(S.settings.goalFat)}` : ""}</div><div class="v">${navyNow ? navyNow.v.toFixed(1) : fat.length ? fat[fat.length - 1].v.toFixed(1) : "—"}<span class="small muted"> %</span></div></div>
       </div>
       ${renderFuel(today)}
       ${wts.length ? `<div class="label">Weight</div><div class="chart" id="chart-wt"></div>` : ""}
-      ${fat.length ? `<div class="label">Body fat %</div><div class="chart" id="chart-fat"></div>` : ""}
+      ${renderTape(today)}
+      ${fat.length ? `<div class="label">Body fat % · scale</div><div class="chart" id="chart-fat"></div>
+      <p class="small muted" style="margin:0">The scale estimates fat from how easily a small current passes through you, which mostly tracks how much water you're holding. Day to day it can swing more than it moves in a month, so read the trend, and trust the tape more. ${srcBtn("tape")}</p>` : ""}
       <div class="label">Last 7 mornings (Garmin)</div>
       <div style="overflow-x:auto"><table class="vt"><thead><tr><th>Day</th><th>Ready</th><th>Sleep</th><th>HRV</th><th>Battery</th><th>RHR</th></tr></thead><tbody>${rows}</tbody></table></div>
       <p class="small muted" style="margin:0">Synced ${g.at ? new Date(g.at).toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" }) : "—"}.</p>
     </section>`;
 }
+// Measurements on Body: latest of each with its 4-week change, the reading, then the waist and tape body-fat charts
+function renderTape(today) {
+  const lt = lastTape(today), H = S.settings.heightIn, sex = S.settings.stdSex;
+  if (!lt) return `<div class="label">Measurements ${srcBtn("tape")}</div>
+      <p class="small muted" style="margin:0">On a bulk the scale can't tell muscle from fat. A tape can: if your weight goes up and your waist stays flat, it's mostly muscle. Waist, neck, arm, chest and thigh every 2 weeks takes about 2 minutes.</p>
+      <div class="actions" style="margin-top:0"><button class="btn" data-act="tape-open">Take measurements</button></div>`;
+  const read = tapeRead(today), navy = navySeries(today);
+  const rows = tapeFields().map(([k, n]) => { const s = tapeSeries(k, today); if (!s.length) return "";
+    const c = tapeChange(k, today);
+    return `<div class="plift"><span class="nm">${n} <span class="num">${toTape(s[s.length - 1].v)}</span> <span class="small muted">${tapeUnit()}</span></span>${s.length > 1 ? spark(s.slice(-8).map(p => p.v)) : "<span></span>"}<span class="num small ${c && k === "waist" && c.d / daysBetween(c.from, c.to) * 30.4 > WAIST_MAX_MO ? "warnt" : ""}">${c ? fmtTapeDelta(c.d) : "—"}</span></div>`; }).join("");
+  const ws = tapeSeries("waist", today);
+  if (ws.length >= 2) S._bodyCharts.push(["chart-waist", { pts: ws, fmt: v => toTape(v), unit: tapeUnit() }]);
+  if (navy.length >= 2) S._bodyCharts.push(["chart-navy", { pts: navy, fmt: v => v.toFixed(1), unit: "%" }]);
+  const need = [!H && "height", !sex && "men's or women's standards", sex === "f" && !lt.hips && "a hips measurement"].filter(Boolean);
+  return `<div class="label" style="display:flex;gap:8px;align-items:center">Measurements ${srcBtn("tape")}<span class="small muted" style="margin-left:auto;text-transform:none;letter-spacing:0">last ${fmtDay(lt.day, { month: "short", day: "numeric" })}</span></div>
+      ${read ? `<div class="pv"><span class="pill ${read.lvl}">${read.pill}</span> <span class="small">${read.t}</span></div>` : `<p class="small muted" style="margin:0">Changes show once you have measurements at least 3 weeks apart.</p>`}
+      <div class="plifts">${rows}</div>
+      <div class="actions" style="margin-top:0"><button class="btn" data-act="tape-open">${lt.day === today ? "Edit today's" : "Measure"}</button></div>
+      ${ws.length >= 2 ? `<div class="label">Waist</div><div class="chart" id="chart-waist"></div>` : ""}
+      ${navy.length >= 2 ? `<div class="label">Body fat % · tape (US Navy method)</div><div class="chart" id="chart-navy"></div>`
+        : navy.length ? `<p class="small muted" style="margin:0">Body fat from the tape: <b class="num">${navy[0].v.toFixed(1)}%</b>. A trend line shows from the next measurement.</p>`
+        : need.length ? `<p class="small muted" style="margin:0">For a body-fat estimate from the tape, add ${need.join(" and ")}${need.some(x => x !== "a hips measurement") ? " under Setup → About you" : ""}.</p>` : ""}`;
+}
 function renderFuel(today) {
   const F = fuel(today);
-  const st = { ok: ["good", "On track"], low: ["warn", "Below target"], high: ["warn", "Above target"], unknown: ["neutral", "Need more weigh-ins"], settling: ["neutral", "Too soon to judge"] }[F.status];
+  const st = { ok: ["good", "On track"], low: ["warn", "Below target"], high: ["warn", "Above target"], unknown: ["neutral", "Need more weigh-ins"], settling: ["neutral", "Too soon to judge"], waist: ["warn", "Waist rising"] }[F.status];
   const hist = F.N.changes.slice(-5).reverse().map(c => `<li>${fmtDay(c.day, { month: "short", day: "numeric" })}: ${c.delta > 0 ? "+" : "−"}${Math.abs(c.delta)} kcal → ~${c.kcal.toLocaleString()} (weight was ${fmtRate(c.perWk)})</li>`).join("");
   return `
       <div class="label" style="display:flex;gap:8px;align-items:center">Fuel · ${esc(F.G.n.toLowerCase())} <span class="pill ${st[0]}">${st[1]}</span></div>
@@ -2875,6 +2969,7 @@ function renderFuel(today) {
         <div class="stat"><div class="label">Protein</div><div class="v">${F.prot}<span class="small muted"> g</span></div></div>
       </div>
       <p class="small muted" style="margin:0">No food logging: the trend line through your weigh-ins${F.tr.n >= 2 ? ` (${F.tr.n} in the last ${TREND_DAYS / 7} weeks)` : ""} shows whether you're eating enough.${F.tr.gap ? ` No weigh-ins ${fmtDay(F.tr.gap.from, { month: "short", day: "numeric" })}–${fmtDay(F.tr.gap.to, { month: "short", day: "numeric" })}, so it's less certain.` : ""}${F.status === "settling" ? " Your target changed recently, so the trend needs time to show it." : ""} The calorie number is a rough guess to anchor on; the changes to it are what matter.${F.nextCheck && F.nextCheck > today ? ` Next check ${fmtDay(F.nextCheck, { weekday: "short", month: "short", day: "numeric" })}.` : ""}</p>
+      ${F.waist.perMo != null ? `<p class="small muted" style="margin:0">Waist ${fmtTapeDelta(F.waist.perMo)} a month over the last ${F.waist.n} measurements${F.waist.perMo > WAIST_MAX_MO ? `, faster than the ${fmtTapeDelta(WAIST_MAX_MO)} a lean bulk allows${F.waistHold ? ", so no extra food even though weight is slow" : ""}` : ""}.</p>` : ""}
       ${hist ? `<ul class="small muted" style="margin:0;padding-left:18px">${hist}</ul>` : ""}`;
 }
 function wireChart() {
@@ -2994,7 +3089,7 @@ function renderSettings() {
         ${row("sessions", "Sessions", `${autoMode() ? "Balanced, built each day" : "Your routines, in rotation"} · ${rs.length} saved routine${rs.length === 1 ? "" : "s"}`)}
         ${row("equipment", "Equipment", eq.have.map(k => esc(EQUIP[k] || k)).join(", ") || "Nothing picked: bodyweight only")}
         ${row("exercises", "Exercises", `${can} you can do · ${skipN} set aside · ${cs.length} your own`)}
-        ${row("about", "About you", `${S.settings.stdSex ? (S.settings.stdSex === "m" ? "Men's" : "Women's") + " standards" : "No strength standards"}${S.settings.birthYear ? ` · born ${S.settings.birthYear}` : ""} · ${z2 ? `Zone 2 ${z2.lo}–${z2.hi} bpm` : "Zone 2 not set"}`)}
+        ${row("about", "About you", `${S.settings.stdSex ? (S.settings.stdSex === "m" ? "Men's" : "Women's") + " standards" : "No strength standards"}${S.settings.birthYear ? ` · born ${S.settings.birthYear}` : ""}${S.settings.heightIn ? ` · ${unit() === "kg" ? fmtHeight(S.settings.heightIn) + " cm" : fmtHeight(S.settings.heightIn) + '"'}` : ""} · ${z2 ? `Zone 2 ${z2.lo}–${z2.hi} bpm` : "Zone 2 not set"}`)}
       </div>
     </section>
     <section class="block">
@@ -3102,6 +3197,8 @@ function renderSettings() {
       <div class="list">
         <div class="row"><div class="l"><b>Birth year</b><div class="small muted">${S.settings.birthYear ? `Age ${ageOn(t)}. Adjusts strength levels outside 23–39${ageOn(t) > 40 ? ", recovery time, and from 50 how often deloads come" : ""}.` : "Optional. Adjusts strength levels and recovery for your age."}</div></div>
           <input class="yearin" id="birthyear" inputmode="numeric" maxlength="4" placeholder="Year" value="${S.settings.birthYear || ""}" aria-label="Birth year"></div>
+        <div class="row"><div class="l"><b>Height</b><div class="small muted">${S.settings.heightIn ? "With waist and neck measurements, gives a body-fat estimate from the tape." : `Optional. With waist and neck measurements, gives a body-fat estimate from the tape. ${unit() === "kg" ? "In cm." : "Like 5'10 or 70 (inches)."}`}</div></div>
+          <input class="yearin" id="heightin" inputmode="${unit() === "kg" ? "numeric" : "text"}" maxlength="6" placeholder="${unit() === "kg" ? "cm" : "ft'in"}" value="${fmtHeight(S.settings.heightIn)}" aria-label="Height"></div>
         <div class="row"><div class="l"><b>Strength standards ${srcBtn("levels")}</b><div class="small muted">Which standards your strength levels compare against. Off until you pick.</div></div>
           <div class="unit-toggle" role="group" aria-label="Strength standards">${[["m", "Men's"], ["f", "Women's"]].map(([k, n]) => `<button type="button" data-act="stdsex" data-v="${k}" aria-pressed="${S.settings.stdSex === k}">${n}</button>`).join("")}</div></div>
         <div class="row"><div class="l"><b>Zone 2 heart rate</b><div class="small muted">${z2 ? `${z2.lo}–${z2.hi} bpm${z2.source ? ` (${esc(z2.source)})` : ""}. Decides how much of a walk counts as cardio.` : "Not set, so walks don't count yet. Your Strava heart-rate zones list it as Zone 2."}</div></div>${z2 ? `${z2Stepper("lo", z2.lo)}${z2Stepper("hi", z2.hi)}` : `<button class="btn" data-act="z2set">Set</button>`}</div>
@@ -3395,6 +3492,12 @@ SOURCES.warmup = { t: "Warm-up sets", p: [
   "A few lighter sets of the lift itself before the working sets is standard practice in strength coaching: it rehearses the movement and lets you check how the weight moves, without tiring you out. Studies that compared warm-up styles found that a lift-specific ramp like this leads to as many or more reps in the working sets, while long stretching beforehand can cost a little.",
   "Iron Ledger ramps to about 40%, 60% and (from 90 lb) 80% of your first working weight, with fewer reps as it gets heavier, rounded to what your plates can make. Small accessories don't need it. Warm-up steps aren't logged, so they never count as sets."],
   refs: [["Ribeiro et al. 2014, warm-up procedures and resistance training performance (Perceptual and Motor Skills)", "https://pubmed.ncbi.nlm.nih.gov/?term=Ribeiro+2014+warm-up+procedures+resistance+training+performance"], ["McCrary et al. 2015, systematic review of upper-body warm-ups (Br J Sports Med)", "https://pubmed.ncbi.nlm.nih.gov/?term=McCrary+2015+upper+body+warm-up+systematic+review"], ["NSCA, Essentials of Strength Training and Conditioning (warm-up chapter)", "https://www.nsca.com/education/books/essentials-of-strength-training-and-conditioning/"]] };
+SOURCES.tape = { t: "Tape vs the scale's body fat", p: [
+  "Home scales estimate body fat by bioelectrical impedance: a small current runs through your feet, and a formula turns the resistance into fat and muscle using your height, weight, age and sex. The current follows water, so the reading moves with hydration, a recent meal or workout, and even skin temperature. Training changes how much water your muscles hold, which is exactly when these scales get less reliable. Comparisons against DEXA find they miss individual changes by more than the changes you're trying to see over a few months.",
+  "A tape is low-tech but direct. On a lean bulk, the waist is the best simple fat signal: if weight climbs while the waist stays about flat (under a quarter inch, about 0.6 cm, a month) and arms, chest or thighs grow, most of the gain is muscle. Iron Ledger trims the calorie target by about 100 a day when the waist rises faster than that even though weight is on target.",
+  "With height, the US Navy method turns waist and neck (and hips, for women) into a body-fat estimate. For a single person it can be 3–4 points off DEXA in either direction, but because the error is mostly a fixed offset, its trend is much steadier than a scale's daily number.",
+  "Measure every 2 weeks, in the morning before eating, same spots and same side, tape snug but not pressing in. Changes smaller than about a quarter inch are within measuring error."],
+  refs: [["Hodgdon & Beckett 1984, the Navy circumference equations (Naval Health Research Center)", "https://apps.dtic.mil/sti/citations/ADA143890"], ["Kyle et al. 2004, bioelectrical impedance analysis in practice (Clinical Nutrition)", "https://pubmed.ncbi.nlm.nih.gov/15556267/"], ["Ross et al. 2020, waist circumference as a vital sign (Nature Reviews Endocrinology)", "https://pubmed.ncbi.nlm.nih.gov/31959973/"]] };
 function srcBtn(key) { return `<button class="help src" data-act="src" data-k="${key}" aria-label="Sources: ${esc(SOURCES[key].t)}">?</button>`; }
 function openSource(key) {
   const x = SOURCES[key]; if (!x) return;
@@ -3780,6 +3883,9 @@ function loadDemo() {
     S.health[k] = { readiness: 40 + ((d * 37) % 50), sleepScore: 60 + ((d * 23) % 35), sleepHours: 6 + ((d * 7) % 20) / 10, hrv: 48 + ((d * 13) % 18), bodyBatteryWake: 45 + ((d * 17) % 50), restingHr: 52 + (d % 5) };
     if (d % 2 === 0) Object.assign(S.health[k], { weightLb: +(182 - (20 - d) * .12 + ((d * 7) % 5) * .2).toFixed(1), bodyFatPct: +(21 - (20 - d) * .05).toFixed(1) });
   }
+  S.tape = { [addDays(today, -42)]: { waist: 34.5, neck: 15.5, arm: 14, chest: 40, thigh: 22.5 }, [addDays(today, -28)]: { waist: 34.25, neck: 15.5, arm: 14.25, chest: 40.25, thigh: 22.5 },
+    [addDays(today, -14)]: { waist: 34.25, neck: 15.5, arm: 14.25, chest: 40.5, thigh: 22.75 }, [today]: { waist: 34.5, neck: 15.75, arm: 14.5, chest: 40.75, thigh: 23 } };
+  S.settings.heightIn ||= 70;
   const rowAt = parseDay(addDays(today, -1)).getTime() + 5 * 36e5;
   S.cardio = [{ id: "x", name: "Afternoon Row", sport: "Rowing", day: addDays(today, -1), t: rowAt, mins: 30, km: 6.5, re: 42, muscles: CARDIO.Rowing }];
   S.conn.garmin = { st: "ok", at: Date.now(), n: 21 }; S.conn.strava = { st: "ok", at: Date.now(), n: 1 };
@@ -3802,6 +3908,23 @@ function backupDocs(j) {
   }
   return null;
 }
+// Height: 5'10, 5' 10", 5 10 or 70 (inches) in lb mode, centimetres in kg mode. Stored in inches; blank clears it
+function fmtHeight(inches) { if (!inches) return ""; if (unit() === "kg") return String(Math.round(inches * 2.54)); const r = Math.round(inches); return `${Math.floor(r / 12)}'${r % 12}`; }
+function parseHeight(v, u = unit()) {
+  v = String(v).trim().replace(/[″"]/g, ""); if (!v) return null;
+  if (u === "kg") { const n = parseFloat(v); return n ? +(n / 2.54).toFixed(2) : NaN; }
+  const m = v.match(/^(\d)\s*(?:['′ ]|ft)\s*(\d{1,2}(?:\.\d+)?)?\s*(?:in)?$/);
+  if (m) return +m[1] * 12 + (+m[2] || 0);
+  const n = parseFloat(v); return isFinite(n) && /^\d+(\.\d+)?$/.test(v) ? n : NaN;
+}
+document.addEventListener("change", async ev => {
+  if (ev.target.id !== "heightin") return;
+  const h = parseHeight(ev.target.value);
+  if (h !== null && !(h >= 48 && h <= 90)) { toast(unit() === "kg" ? "Enter your height in cm, like 178" : "Enter your height like 5'10 or 70"); ev.target.value = fmtHeight(S.settings.heightIn); return; }
+  const { heightIn, ...rest } = S.settings;
+  S.settings = h ? { ...rest, heightIn: h } : rest;
+  render(); await saveDoc("settings/main", S.settings);
+});
 // Birth year: blank clears it; anything outside a plausible range is refused
 document.addEventListener("change", async ev => {
   if (ev.target.id !== "birthyear") return;

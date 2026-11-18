@@ -6,7 +6,6 @@ Deliberately not planned: food or calorie logging, a rest timer, phone reminders
 
 ## Features
 
-- **Tape measurements.** Waist, arms and chest every 2–4 weeks, entered through "+ Log" and charted on Body. On a lean bulk with no food log, the scale can't separate muscle from fat, and the scale's body-fat % is noisy: if weight goes up and the waist stays flat, the bulk is working. Later, the Fuel nudge could use the waist rate (ease off the calories if the waist climbs faster than the arms).
 - **"What would it unlock?" for gear you don't own.** In Setup → Equipment, list what each missing item opens up (a rack: back squat, bench, inverted rows), with lagging movements first. It builds on `NEEDS`, `SLOT_SUBS` and the strength levels.
 - **Post sessions to Strava.** Send a finished lifting session out as a Weight Training activity, with the exercises in the description. It needs the `activity:write` scope (users reconnect once) and a new worker endpoint.
 

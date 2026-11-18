@@ -12,8 +12,8 @@ const entry = (ex, w, r, effort = "solid", n = 3) => ({ ex, effort, sets: sets(w
 const session = (day, ...entries) => ({ [day]: { date: day, entries } });
 // Run fn with this data in place of the app's state, then put everything back
 function scene(state, fn) {
-  const keys = ["sessions", "cardio", "health", "routines", "custom", "settings"], saved = Object.fromEntries(keys.map(k => [k, S[k]]));
-  Object.assign(S, { sessions: {}, cardio: [], health: {}, routines: {}, custom: {}, settings: { unit: "lb" } }, state);
+  const keys = ["sessions", "cardio", "health", "routines", "custom", "settings", "tape"], saved = Object.fromEntries(keys.map(k => [k, S[k]]));
+  Object.assign(S, { sessions: {}, cardio: [], health: {}, routines: {}, custom: {}, settings: { unit: "lb" }, tape: {} }, state);
   try { return fn(); } finally { Object.assign(S, saved); }
 }
 
@@ -605,6 +605,51 @@ function run() {
     sh.innerHTML = "";
   }));
   test("sources: the variety note has its references", () => { ok(SOURCES.variety.refs.length >= 2); ok(TIPS.swap); });
+
+  // Tape measurements
+  const bulkWeights = perWk => Object.fromEntries(Array.from({ length: 15 }, (_, i) => [ago(42 - i * 3), { weightLb: +(150 + perWk * (i * 3) / 7).toFixed(2) }]));
+  const tapes = rows => Object.fromEntries(rows.map(([d, t]) => [ago(d), t]));
+  test("tape: Navy estimate, men's and women's", () => {
+    near(navyFat({ waist: 32, neck: 15 }, 70, "m"), 13.4); near(navyFat({ waist: 30, neck: 13, hips: 40 }, 65, "f"), 31.1);
+    eq(navyFat({ waist: 32, neck: 15 }, null, "m"), null); eq(navyFat({ waist: 32, neck: 15 }, 70, null), null); eq(navyFat({ waist: 30, neck: 13 }, 65, "f"), null);
+  });
+  test("tape: height parses feet and inches, inches, or cm", () => {
+    eq(parseHeight("5'10", "lb"), 70); eq(parseHeight(`5' 10"`, "lb"), 70); eq(parseHeight("5 10", "lb"), 70); eq(parseHeight("70", "lb"), 70); eq(parseHeight("6'", "lb"), 72);
+    near(parseHeight("178", "kg"), 70.08); eq(parseHeight("", "lb"), null); ok(isNaN(parseHeight("tall", "lb")));
+  });
+  test("tape: a trend needs 3 measurements over 3 weeks", () => {
+    scene({ tape: tapes([[14, { waist: 32 }], [0, { waist: 33 }]]) }, () => eq(tapeTrend("waist", today).perMo, undefined));
+    scene({ tape: tapes([[28, { waist: 32 }], [14, { waist: 32.25 }], [0, { waist: 32.5 }]]) }, () => near(tapeTrend("waist", today).perMo, .54));
+  });
+  test("tape: weight on target but the waist climbing → trim 100", () => scene({ health: bulkWeights(.4), settings: { unit: "lb", nutrition: { goal: "bulk" } },
+    tape: tapes([[28, { waist: 32 }], [14, { waist: 32.3 }], [0, { waist: 32.6 }]]) }, () => {
+    const F = fuel(today); eq(F.status, "waist"); eq(F.nudge, { delta: -100 });
+    ok(coach(today).msgs.some(m => m.t.includes("waist is up")), "coach message");
+  }));
+  test("tape: a flat waist leaves the plan alone", () => scene({ health: bulkWeights(.4), settings: { unit: "lb", nutrition: { goal: "bulk" } },
+    tape: tapes([[28, { waist: 32 }], [14, { waist: 32.1 }], [0, { waist: 32 }]]) }, () => { const F = fuel(today); eq(F.status, "ok"); eq(F.nudge, null); }));
+  test("tape: slow weight gain with a climbing waist adds no food", () => scene({ health: bulkWeights(0), settings: { unit: "lb", nutrition: { goal: "bulk" } },
+    tape: tapes([[28, { waist: 32 }], [14, { waist: 32.3 }], [0, { waist: 32.6 }]]) }, () => { const F = fuel(today); eq(F.status, "low"); eq(F.nudge, null); ok(F.waistHold); }));
+  test("tape: flat waist with bigger arms reads as muscle", () => scene({ tape: tapes([[28, { waist: 32, arm: 13 }], [0, { waist: 32.1, arm: 13.5 }]]) }, () => {
+    const r = tapeRead(today); eq(r.pill, "Mostly muscle"); ok(r.t.includes("upper arm +0.5"), r.t);
+  }));
+  test("tape: a reminder 2 weeks after the last measurement, not before", () => {
+    scene({ tape: tapes([[14, { waist: 32 }]]) }, () => ok(coach(today).msgs.some(m => m.id === "tape")));
+    scene({ tape: tapes([[13, { waist: 32 }]]) }, () => ok(!coach(today).msgs.some(m => m.id === "tape")));
+    scene({}, () => ok(!coach(today).msgs.some(m => m.id === "tape"), "never measured: no nag"));
+  });
+  test("tape: Body shows the measurements, waist chart and tape body fat", () => scene({ health: bulkWeights(.4), settings: { unit: "lb", heightIn: 70, stdSex: "m" },
+    tape: tapes([[28, { waist: 32, neck: 15, arm: 13 }], [0, { waist: 32, neck: 15, arm: 13.5 }]]) }, () => {
+    const box = document.createElement("div"); box.innerHTML = renderBody();
+    ok(box.querySelector("#chart-waist") && box.querySelector("#chart-navy"), "charts"); ok(box.textContent.includes("Body fat · tape"), "tape stat");
+    ok(SOURCES.tape.refs.length >= 2);
+  }));
+  test("tape: the sheet asks for hips only with women's standards, and shows last time's numbers", () => {
+    scene({ settings: { unit: "lb", stdSex: "m" }, tape: tapes([[14, { waist: 32 }]]) }, () => { S.day = today; openTape();
+      const sh = document.getElementById("sheet"); eq(sh.querySelectorAll("input[id^=tp-]").length, 5); eq(sh.querySelector("#tp-waist").placeholder, "32"); sh.innerHTML = ""; });
+    scene({ settings: { unit: "lb", stdSex: "f" } }, () => { openTape(); const sh = document.getElementById("sheet"); ok(sh.querySelector("#tp-hips"), "hips"); sh.innerHTML = ""; });
+  });
+  test("tape: cm in kg mode, stored as inches", () => scene({ settings: { unit: "kg" } }, () => { eq(fromTape("81.3"), 32.01); eq(toTape(32), 81.3); eq(tapeUnit(), "cm"); }));
 
   const failed = results.filter(r => !r.ok);
   document.title = failed.length ? `${failed.length} FAILED` : "all passed";

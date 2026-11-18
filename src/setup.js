@@ -2,18 +2,20 @@
 /* First-run setup, starter routines, and manual cardio / weigh-ins (what Strava and Garmin supplied in the artifact).
    Loaded after app.js (its boot() awaits IndexedDB, so this file runs before the first real render). */
 
-/* ============================== Manual log: body/<day> { weightLb?, cardio: [{ id, sport, mins, effort, re? }] } (re: imported Strava relative effort) ============================== */
+/* ============================== Manual log: body/<day> { weightLb?, cardio: [{ id, sport, mins, effort, re? }], tape? } ==============================
+   re: imported Strava relative effort. tape: { waist, neck, arm, chest, thigh, hips? } in inches, any of them blank. */
 const CARDIO_TYPES = { Run: "Run", Ride: "Bike", Rowing: "Row", Swim: "Swim", Hike: "Hike", Elliptical: "Elliptical", StairStepper: "Stairs", NordicSki: "Ski", Walk: "Walk" };
 const LOW_IMPACT = ["Ride", "Rowing", "Swim", "Elliptical"];
 // Relative-effort points per minute, roughly what Strava gives for each effort (30 min easy ≈ 25)
 const CARDIO_EFFORT = { easy: { label: "Easy", re: .85 }, moderate: { label: "Moderate", re: 1.4 }, hard: { label: "Hard", re: 2.2 } };
 
-S.body = {}; S.extCardio = []; S.extHealth = {};
+S.body = {}; S.extCardio = []; S.extHealth = {}; S.tape = {};
 // S.cardio / S.health are what the coach reads: connector data plus what you logged by hand
 function rebuildDerived() {
   const manual = [];
-  const health = structuredClone(S.extHealth);
+  const health = structuredClone(S.extHealth), tape = {};
   for (const [day, b] of Object.entries(S.body)) {
+    if (b.tape && Object.keys(b.tape).length) tape[day] = b.tape;
     if (b.weightLb) health[day] = { ...(health[day] || {}), weightLb: b.weightLb };
     (b.cardio || []).forEach((c, i) => manual.push({ id: c.id, name: CARDIO_TYPES[c.sport] || c.sport, sport: c.sport, day,
       t: parseDay(day).getTime() + (6 + i) * 36e5, mins: c.mins, km: 0, re: c.re ?? Math.round(c.mins * (CARDIO_EFFORT[c.effort]?.re || 1)), muscles: CARDIO[c.sport] || {}, manual: true }));
@@ -21,11 +23,12 @@ function rebuildDerived() {
   // Strava-imported manual entries ("strava-<id>") give way once the live Strava feed has the same activity
   const live = new Set(S.extCardio.map(a => "strava-" + a.id));
   S.cardio = [...S.extCardio, ...manual.filter(a => !live.has(a.id))];
-  S.health = health;
+  S.health = health; S.tape = tape;
 }
 function bodyDoc(day) { return S.body[day] || { cardio: [] }; }
 async function saveBody(day, b) {
-  const empty = !b.weightLb && !(b.cardio || []).length;
+  if (b.tape && !Object.keys(b.tape).length) { b = { ...b }; delete b.tape; }
+  const empty = !b.weightLb && !(b.cardio || []).length && !b.tape;
   if (empty) delete S.body[day]; else S.body[day] = b;
   rebuildDerived(); render();
   await saveDoc("body/" + day, empty ? null : b);
@@ -62,6 +65,22 @@ function openWeight() {
       <div class="actions" style="margin-top:0"><button class="btn primary" data-act="wt-save">Save</button>${b.weightLb ? `<button class="btn ghost" data-act="wt-del">Remove</button>` : ""}</div>
     </div></div></div>`;
   setTimeout(() => $("#wt-in")?.focus(), 50);
+}
+
+// Tape measurements: every 2 weeks or so, entered in inches or cm (stored in inches)
+function openTape() {
+  const day = S.day, b = bodyDoc(day), cur = b.tape || {}, last = lastTape(addDays(day, -1)), h = S.settings.heightIn;
+  const rows = tapeFields().map(([k, n, how]) => `<label class="eqmax" for="tp-${k}" style="align-items:flex-start"><span><b>${n}</b><span class="small muted" style="display:block">${how}</span></span>
+      <span class="stepper" style="display:inline-flex;width:auto;flex:none"><input id="tp-${k}" inputmode="decimal" value="${cur[k] ? toTape(cur[k]) : ""}" placeholder="${last?.[k] ? toTape(last[k]) : ""}" style="width:70px"><span class="u">${tapeUnit()}</span></span></label>`).join("");
+  $("#sheet").innerHTML = `<div class="sheet-bg" data-act="closesheet"><div class="sheet" role="dialog" aria-label="Measurements">
+    <div class="sh"><div style="display:flex;justify-content:space-between;align-items:center"><h2>Measurements · ${day === dayKey(new Date()) ? "today" : fmtDay(day)}</h2><button class="x iconbtn" data-act="closesheet" aria-label="Close">×</button></div></div>
+    <div class="sb" style="display:grid;gap:12px;padding-top:12px">
+      <p class="small muted" style="margin:0">In the morning before eating, tape snug but not pressing in, same side each time. Leave any blank. Every 2 weeks is enough: smaller changes than that are within measuring error.${last ? ` Grey numbers are from ${fmtDay(last.day, { month: "short", day: "numeric" })}.` : ""}</p>
+      ${rows}
+      ${!h || !S.settings.stdSex ? `<p class="small muted" style="margin:0">For a body-fat estimate from waist and neck, add your ${[!h && "height", !S.settings.stdSex && "men's or women's standards"].filter(Boolean).join(" and ")} under Setup → About you.</p>` : ""}
+      <div class="actions" style="margin-top:0"><button class="btn primary" data-act="tape-save">Save</button>${b.tape ? `<button class="btn ghost" data-act="tape-del">Remove</button>` : ""}</div>
+    </div></div></div>`;
+  setTimeout(() => $("#tp-waist")?.focus(), 50);
 }
 
 /* ============================== Starter routines ============================== */
@@ -198,6 +217,16 @@ document.addEventListener("click", async ev => {
       if (!isFinite(n) || n <= 0) { toast("Enter a weight"); return; }
       await saveBody(S.day, { ...bodyDoc(S.day), weightLb: fromDisp(n) }); closeSheet(); toast("Weigh-in saved"); break; }
     case "wt-del": { const bd = { ...bodyDoc(S.day) }; delete bd.weightLb; await saveBody(S.day, bd); closeSheet(); break; }
+    case "tape-open": openTape(); break;
+    case "tape-save": { const t = {};
+      for (const [k] of tapeFields()) { const raw = $("#tp-" + k)?.value.trim(); if (!raw) continue;
+        const v = fromTape(raw); if (!(v >= TAPE_RANGE[k][0] && v <= TAPE_RANGE[k][1])) { toast(`Check the ${TAPE_NAMES[k].toLowerCase()} number`); $("#tp-" + k)?.focus(); return; }
+        t[k] = v; }
+      const old = bodyDoc(S.day).tape || {};
+      if (old.hips && !t.hips && !tapeFields().some(([k]) => k === "hips")) t.hips = old.hips;   // hips aren't shown for men's standards: keep any already logged
+      if (!Object.keys(t).length) { toast("Enter at least one measurement"); return; }
+      await saveBody(S.day, { ...bodyDoc(S.day), tape: t }); closeSheet(); toast("Measurements saved"); break; }
+    case "tape-del": { const bd = { ...bodyDoc(S.day) }; delete bd.tape; await saveBody(S.day, bd); closeSheet(); break; }
   }
 });
 

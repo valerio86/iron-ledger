@@ -30,6 +30,12 @@ Confidence: **strong** = several meta-analyses agree; **moderate** = one good me
 
 **For the app:** a session builder should hit each main movement pattern (push, pull, squat, hinge) about 2× a week, rather than 1× with more sets.
 
+### Lifting on consecutive days
+
+- **Frequency itself is not the constraint.** Saric et al. (2019): 27 trained men, 6 weeks, the same weekly volume in 3 or 6 sessions. Strength and muscle thickness improved about equally. Colquhoun et al. (2018) found the same for 3 vs 6 days. *Moderate (small, short trials).*
+- **The muscle's recovery is.** Morán-Navarro et al. (2017): sets taken to failure slowed neuromuscular and metabolic recovery for 24–48 h, compared with the same work stopped short of failure. *Moderate.*
+- **For the app:** the day after a lift can be a lift when (1) you're 2+ lifts short of the week, (2) it isn't a third day running, (3) readiness/HRV/notes are normal, (4) you're past the first ~6 sessions, and (5) the session's main lifts avoid muscles that got ≥3 sets yesterday. Balanced mode drops the slots that would repeat them; routine mode only offers routines that rest them. The coach suggests stopping sets 2–3 reps short that day.
+
 ## 4. Load and rep ranges: when strength and size split apart
 
 - **Size:** muscles grow about equally with any load from about 30% of 1RM up, as long as sets go near failure. Moderate loads (about 6–15 reps) take the least time (Schoenfeld et al. 2021, the "repetition continuum" revisited). *Strong.*
@@ -112,6 +118,9 @@ Confidence: **strong** = several meta-analyses agree; **moderate** = one good me
 - Barbell Medicine, "Progressive Loading Part 3: The Death of the Novice-Intermediate-Advanced Framework".
 - Rippetoe M., Kilgore L. *Practical Programming for Strength Training*.
 - McCulloch masters age coefficients: APF Best Lifter formula page (worldpowerliftingcongress.com) and Global Powerlifting Alliance master age formula.
+- Saric J. et al. (2019). Resistance training frequencies of 3 and 6 times per week produce similar muscular adaptations in resistance-trained men. *J Strength Cond Res* 33(Suppl 1):S122–S129. PMID 30363041.
+- Colquhoun R. et al. (2018). Training volume, not frequency, indicative of maximal strength adaptations to resistance training. *J Strength Cond Res* 32(5):1207–1213. PMID 29324578.
+- Morán-Navarro R. et al. (2017). Time course of recovery following resistance training leading or not to failure. *Eur J Appl Physiol* 117(12):2387–2399.
 - Kassiano W. et al. (2022). Does varying resistance exercises promote superior muscle hypertrophy and strength gains? A systematic review. *J Strength Cond Res* 36(6):1753–1762. PMID 35438660.
 - Baz-Valle E. et al. (2019). The effects of exercise variation in muscle thickness, maximal strength and motivation in resistance trained men. *PLoS One* 14(12):e0226989.
 - Kassiano W. et al. (2024). Muscle hypertrophy and strength adaptations to systematically varying resistance exercises. *Res Q Exerc Sport*. ro.ecu.edu.au/ecuworks2022-2026/4912.

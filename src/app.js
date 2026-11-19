@@ -1662,8 +1662,13 @@ function similarEx(exId, day, ctx = adviceCtx(day), n = 4) {
 
 function buildSession(day) {
   const ctx = adviceCtx(day), why = [], items = [], picked = [];
-  // Lifted yesterday: main lifts and accessories skip the muscles worked hard then (see workedYesterday)
-  const avoid = liftedOn(addDays(day, -1)) ? workedYesterday(day) : null, fresh = id => !hitsWorked(id, avoid).length;
+  // Main lifts and accessories skip muscles that need the day: worked hard yesterday (see workedYesterday), or noted as sore
+  const worked = liftedOn(addDays(day, -1)) ? workedYesterday(day) : null;
+  const sore = new Set(ctx.issues.filter(i => i.k.startsWith("sore:")).map(i => i.k.slice(5)));
+  const avoid = worked || sore.size ? new Set([...(worked || []), ...sore]) : null;
+  const soreHit = id => Object.entries(exById(id).muscles).filter(([m, w]) => w >= .75 && sore.has(m)).map(([m]) => m);
+  const avoidHits = id => [...new Set([...hitsWorked(id, worked), ...soreHit(id)])];
+  const fresh = id => !avoidHits(id).length;
   const used = {}; for (const x of allDoneSets(x => x.day < day)) used[x.ex.id] = (used[x.ex.id] || 0) + 1;
   // Last day a movement was trained. A balanced session records its main slots (session.slots), so its accessories
   // (a single-leg RDL on a squat day) don't count as that movement's turn.
@@ -1697,7 +1702,10 @@ function buildSession(day) {
     }).sort((a, b) => b.score - a.score);
     const o = opts[0];
     if (!o.id) {
-      if (avoid && pair.some(sub => ranked(sub, used).some(id => !skipped(id) && ok(id, 1)))) why.push(`${pair.map(sub => SLOT_SUBS[sub][0].toLowerCase()).join(" and ")}: rested today, since you worked ${muscleList(pair.flatMap(sub => hitsWorked(pickIn0(sub), avoid)).filter((m, i, a) => a.indexOf(m) === i))} yesterday`);
+      if (avoid && pair.some(sub => ranked(sub, used).some(id => !skipped(id) && ok(id, 1)))) {
+        const ms = [...new Set(pair.flatMap(sub => avoidHits(pickIn0(sub))))], y = ms.filter(m => worked?.has(m)), so = ms.filter(m => !worked?.has(m));
+        why.push(`${pair.map(sub => SLOT_SUBS[sub][0].toLowerCase()).join(" and ")}: rested today, ${[y.length && `since you worked ${muscleList(y)} yesterday`, so.length && `to spare your sore ${muscleList(so)}`].filter(Boolean).join(" and ")}`);
+      }
       continue;
     }
     picked.push(o.sub);
@@ -1755,7 +1763,9 @@ function buildSession(day) {
     add(pick.id, numbers(pick.id, false), Math.max(2, Math.min(3, Math.ceil(need(m) / left))), `${lname(pick.id)}: ${MUSCLES[m].n.toLowerCase()} at ${at} of ${MUSCLES[m].lo}+ sets this week`);
     acc++;
   }
-  const name = picked.length ? (picked.length < SESSION_SLOTS.length && avoid ? "Split: " : "Full body: ") + picked.map((k, i) => i ? SLOT_SUBS[k][0].toLowerCase() : SLOT_SUBS[k][0]).join(", ") : AUTO.name;
+  // Every main movement rested: what's left is core and small-muscle work, so say that rather than "Balanced"
+  const name = picked.length ? (picked.length < SESSION_SLOTS.length && avoid ? "Split: " : "Full body: ") + picked.map((k, i) => i ? SLOT_SUBS[k][0].toLowerCase() : SLOT_SUBS[k][0]).join(", ")
+    : items.length ? "Light day: core and accessories" : AUTO.name;
   return { ...AUTO, name, items, why, slots: picked };
 }
 
@@ -2305,7 +2315,11 @@ function openElse() {
   const row = (attrs, t, d, pill = "") => `<button class="exrow" ${attrs}><div class="l"><div>${t}</div><div class="small muted">${d}</div></div>${pill || `<span class="chev" aria-hidden="true">›</span>`}</button>`;
   const rows = [];
   if (adapt?.changes.length) rows.push(row(`data-act="routine" data-raw="1" data-id="${esc(p.routine.id)}"`, `${esc(p.routine.name)} as written`, "Without today's adjustments"));
-  if (!p.routine?.auto) rows.push(row(`data-act="routine" data-id="auto"`, "Balanced session", "Built for today: a lower, a push and a pull movement, plus what's short this week"));
+  if (!p.routine?.auto) {
+    const bs = buildSession(day);
+    if (bs.items.length) rows.push(row(`data-act="routine" data-id="auto"`, esc(bs.name), bs.items.map(it => esc(exById(it.ex).name)).join(" · ")));
+    else rows.push(`<div class="exrow" aria-disabled="true"><div class="l"><div class="muted">Balanced session</div><div class="small muted">Nothing fits today: every movement works muscles that need the day. Pick a routine or build your own if you still want to lift.</div></div></div>`);
+  }
   c.routineScores.forEach((x, i) => { if (x.r.id === p.routine?.id) return;
     rows.push(row(`data-act="routine" data-id="${esc(x.r.id)}"`, esc(x.r.name), x.r.items.map(it => esc(exById(it.ex).name)).join(" · "), i === 0 ? `<span class="pill good">Best fit today</span>` : x.score < 0 ? `<span class="pill bad">Muscles tired</span>` : "")); });
   rows.push(row(`data-act="openadd"`, "Build your own", "Add exercises one at a time"));

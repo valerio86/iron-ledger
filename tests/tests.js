@@ -528,6 +528,73 @@ function run() {
     ok(forecast(today, 4).length === 4);
   }));
 
+  // Lifting two days running: catch-up only, and only for muscles yesterday left alone
+  const oldLifts = Object.assign({}, ...[20, 22, 24, 26, 28, 30].map(n => session(ago(n), entry("goblet", 30, 8))));
+  const lowerUpper = { lower: { id: "lower", name: "Lower", items: [{ ex: "goblet", sets: 3, r: 8 }, { ex: "rdl", sets: 3, r: 8 }] },
+    upper: { id: "upper", name: "Upper", items: [{ ex: "db_bench", sets: 3, r: 8 }, { ex: "db_row", sets: 3, r: 8 }, { ex: "db_ohp", sets: 3, r: 8 }] } };
+  const rGear = { ...dbGear, week: { lifts: 3, cardio: 0, cardioMin: 0 } };
+  const lowerY = session(ago(1), entry("goblet", 30, 8), entry("rdl", 40, 8));
+  test("b2b: behind on the week, the day after Lower is Upper", () => scene({ sessions: { ...oldLifts, ...lowerY }, routines: lowerUpper, settings: rGear }, () => {
+    const p = planDay(today); eq(p.kind, "lift"); eq(p.routine.id, "upper"); ok(p.b2b, "flagged"); ok(p.why.some(w => w.includes("2 lifts short")), p.why.join(" | "));
+    ok(!p.alts.some(r => r.id === "lower"), "offered Lower again");
+  }));
+  test("b2b: on pace for the week, lifting days stay apart", () => scene({ sessions: { ...oldLifts, ...lowerY, ...session(ago(3), entry("db_bench", 40, 8)) }, routines: lowerUpper, settings: rGear }, () => {
+    const p = planDay(today); ok(p.kind !== "lift", p.kind); ok(p.why.some(w => w.includes("on pace")), p.why.join(" | "));
+  }));
+  test("b2b: never a third day running", () => scene({ sessions: { ...oldLifts, ...lowerY, ...session(ago(2), entry("db_bench", 40, 8)) }, routines: lowerUpper, settings: { ...rGear, week: { lifts: 5, cardio: 0, cardioMin: 0 } } }, () => {
+    ok(planDay(today).kind !== "lift");
+  }));
+  test("b2b: not for newcomers, or when recovery is down", () => {
+    scene({ sessions: lowerY, routines: lowerUpper, settings: rGear }, () => ok(planDay(today).kind !== "lift", "newcomer"));
+    scene({ sessions: { ...oldLifts, ...lowerY }, routines: lowerUpper, settings: rGear, health: { [today]: { readiness: 40 } } }, () => ok(planDay(today).kind !== "lift", "low readiness"));
+  });
+  test("b2b: with only full-body routines, no lift", () => scene({ sessions: { ...oldLifts, ...lowerY }, routines: { full: { id: "full", name: "Full", items: [{ ex: "goblet", sets: 3, r: 8 }, { ex: "db_bench", sets: 3, r: 8 }] } }, settings: rGear }, () => {
+    const p = planDay(today); ok(p.kind !== "lift", p.kind); ok(p.why.some(w => w.includes("quads")), p.why.join(" | "));
+  }));
+  test("b2b: balanced mode builds a split that rests yesterday's muscles", () => scene({ sessions: { ...oldLifts, ...lowerY }, settings: dbGear }, () => {
+    const p = planDay(today); eq(p.kind, "lift");
+    ok(p.routine.name.startsWith("Split"), p.routine.name);
+    for (const it of p.routine.items) eq(hitsWorked(it.ex, workedYesterday(today)), [], it.ex);
+    const b = buildSession(today); eq(b.items.map(x => x.ex), p.routine.items.map(x => x.ex), "Start builds the same session");
+  }));
+  test("b2b: balanced mode after a full-body day stays off lifting", () => scene({ sessions: { ...oldLifts, ...session(ago(1), entry("split_squat", 30, 8), entry("db_bench", 40, 8), entry("db_row", 40, 8)) }, settings: dbGear }, () => {
+    ok(planDay(today).kind !== "lift");
+  }));
+  test("b2b: the coach warns only about muscles worked yesterday", () => {
+    scene({ sessions: { ...oldLifts, ...lowerY, ...session(today, entry("db_bench", 40, 8)) }, routines: lowerUpper, settings: rGear }, () => ok(!coach(today).msgs.some(m => m.t.includes("hard yesterday")), "warned about bench"));
+    scene({ sessions: { ...oldLifts, ...lowerY, ...session(today, entry("goblet", 30, 8)) }, routines: lowerUpper, settings: rGear }, () => {
+      const m = coach(today).msgs.find(m => m.t.includes("hard yesterday")); ok(m && m.t.includes("quads"), "no warning");
+    });
+  });
+
+  test("sore: a noted sore muscle is left out of the balanced session", () => scene({ sessions: { ...oldLifts, [today]: { date: today, entries: [], issues: [{ k: "sore:hamstrings", sev: 1 }] } }, settings: dbGear }, () => {
+    const b = buildSession(today);
+    ok(!b.items.some(it => (exById(it.ex).muscles.hamstrings || 0) >= .75), b.items.map(x => x.ex).join());
+    ok(b.items.some(it => subOf(it.ex) === "squat"), "lower slot should fall to a squat");
+  }));
+  test("sore: the why line names sore muscles apart from yesterday's", () => scene({
+    sessions: { ...oldLifts, ...session(ago(1), entry("hip_thrust", 60, 8)), [today]: { date: today, entries: [], issues: [{ k: "sore:quads", sev: 1 }] } }, settings: dbGear }, () => {
+    const b = buildSession(today); ok(!b.slots.some(k => ["squat", "hinge"].includes(k)), b.slots.join());
+    ok(b.why.some(w => w.includes("glutes yesterday") && w.includes("sore quads")), b.why.join(" | "));
+  }));
+  test("sore: with legs sore and legs worked yesterday, the lower slot is rested and says why", () => scene({
+    sessions: { ...oldLifts, ...session(ago(1), entry("split_squat", 30, 8)), [today]: { date: today, entries: [], issues: [{ k: "sore:hamstrings", sev: 1 }] } }, settings: dbGear }, () => {
+    const b = buildSession(today); ok(!b.slots.some(k => ["squat", "hinge"].includes(k)), b.slots.join());
+    ok(b.why.some(w => w.startsWith("squat and hinge: rested today")), b.why.join(" | "));
+  }));
+  test("light day: after a full-body day, lifting anyway is named for what it is", () => scene({ sessions: { ...oldLifts, ...session(ago(1), entry("split_squat", 30, 8), entry("rdl", 40, 8), entry("db_bench", 40, 8), entry("db_ohp", 30, 8), entry("db_row", 40, 8)) }, settings: dbGear }, () => {
+    const b = buildSession(today); eq(b.slots, []);
+    ok(b.items.length ? b.name.startsWith("Light day") : b.name === "Balanced session", b.name);
+  }));
+
+  test("lift anyway: Something else shows what the balanced session would be", () => scene({ sessions: { ...oldLifts, ...lowerY }, routines: lowerUpper, settings: { ...rGear, week: { lifts: 3, cardio: 3, cardioMin: 90 } } }, () => {
+    const d = S.day; S.day = today;
+    try {
+      openElse(); const t = $("#sheet [data-id=auto]")?.textContent || $("#sheet").textContent; closeSheet();
+      ok(/Split: |Light day|Nothing fits today/.test(t), t.slice(0, 200)); ok(!/Goblet squat|Romanian deadlift/.test(t), "offers yesterday's lower body: " + t);
+    } finally { S.day = d; }
+  }));
+
   // Exercise preferences: your order, three levels of skipping, block and stall offers
   const withPrefs = (prefs, extra = {}) => ({ ...dbGear, week: { lifts: 3, cardio: 3, mode: "auto" }, prefs, ...extra });
   const pressOf = b => b.items.find(x => ["hpress", "vpress"].includes(subOf(x.ex)));

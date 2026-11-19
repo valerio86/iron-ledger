@@ -1335,6 +1335,16 @@ function fuel(day) {
 }
 function fuelPick(list, day, n = 2) { const i = daysBetween("2026-01-01", day) % list.length; return [...list, ...list].slice(i, i + n); }
 function agoText(k, day) { const n = daysBetween(k, day); return n === 1 ? "yesterday" : `${n} days ago`; }
+/* Lifting two days running. Recovery is per muscle, not per calendar day: training a muscle again within ~24 h is what
+   costs (more so after sets to failure), while working different muscles the next day is a normal split. So a lift the day
+   after a lift is allowed as catch-up when you're 2+ lifts short of the week, it isn't a third day in a row, recovery looks
+   normal, and the session leaves yesterday's hard-worked muscles alone. */
+const B2B_HIT = 3;   // sets a muscle got yesterday (helpers count partly, easy sets half) that rule it out as a main mover today
+function workedYesterday(day) { const y = addDays(day, -1), s = setsPerMuscle(y, y); return new Set(Object.keys(s).filter(m => s[m] >= B2B_HIT)); }
+// The main muscles of an exercise that were worked hard yesterday
+function hitsWorked(exId, worked) { return worked ? Object.entries(exById(exId).muscles).filter(([m, w]) => w >= 1 && worked.has(m)).map(([m]) => m) : []; }
+const muscleList = ms => ms.map(m => MUSCLES[m].n.toLowerCase()).join(", ");
+
 function planDay(day) {
   const wk = { ...WEEK_DEFAULT, ...(S.settings.week || {}) };
   const rotation = (wk.rotation || Object.keys(S.routines).sort()).filter(id => S.routines[id]);
@@ -1403,6 +1413,14 @@ function planDay(day) {
       : { mins: m, text: `${m} min easy ${lowImpactWords()} after lifting${z2Text()}. You're at ${minsDone + todayMins} of ${minsT} cardio minutes this week.` };
   };
 
+  // Lifted yesterday: can today still be a lift? (b2bNo = why not)
+  const worked = lastLift === yest ? workedYesterday(day) : null, short = wk.lifts - liftDays.length;
+  const b2bNo = !worked ? null
+    : liftedOn(addDays(day, -2)) ? "you've lifted two days running, so a third waits"
+    : short < 2 ? "you lifted yesterday and the week is on pace, so lifting days stay apart"
+    : isNewcomer(day) ? "you lifted yesterday, and while lifts are new to you they leave you sore for longer, so lifting days stay apart"
+    : low || tiredNote || tr.hrvDown || tr.rhrUp ? "you lifted yesterday and recovery is down, so not two days running"
+    : null;
   let p;
   if (liftedOn(day)) {
     p = { kind: "done", title: `Lifted today: ${routineOf(day)?.name || "custom session"}`, note: "Easy cardio later is fine. No second lift." };
@@ -1411,29 +1429,38 @@ function planDay(day) {
   else if (sick) p = { kind: "rest", title: "Rest", note: "You noted feeling sick. Training while ill slows recovery from both. Come back when you've had a day without symptoms." };
   else if (poor) p = { kind: "rest", title: "Rest or light mobility", note: "10–20 min. Readiness is poor; a hard session today costs more than it builds." };
   else if (streak >= 6) p = { kind: "rest", title: "Rest day", note: `You've trained ${streak} days in a row. Take one fully off.` };
-  else if (lastLift === yest) {
+  else if (b2bNo) {
     p = cardioShort ? cardioPickSafe() : { kind: "rest", title: "Rest or light mobility", note: "Cardio is already on target this week." };
-    why.push("you lifted yesterday, and lifting days shouldn't be back to back");
+    why.push(b2bNo);
   } else if (liftDays.length < wk.lifts && (order.length || autoMode())) {
     const ok = r => !blockedIn(r).length;
     const built = autoMode() ? buildSession(day) : null;
-    const mostlyBlocked = built ? built.items.length < 2 : order.every(r => blockedIn(r).length * 2 >= r.items.length);
-    if (mostlyBlocked) {
+    // The day after a lift, only sessions that rest yesterday's muscles: routines with no main lift on them, or a built session with 2+ main lifts left
+    const cands = worked ? order.filter(r => !r.items.some(it => hitsWorked(it.ex, worked).length)) : order;
+    const noSplit = worked && (built ? built.slots.length < 2 : !cands.length);
+    const mostlyBlocked = built ? built.items.length < 2 : cands.every(r => blockedIn(r).length * 2 >= r.items.length);
+    if (noSplit) {
+      p = cardioShort ? cardioPickSafe() : { kind: "rest", title: "Rest or light mobility", note: "" };
+      why.push(`you lifted yesterday, and ${built ? "a session" : "every routine"} today would work ${muscleList([...worked])} again before they've recovered`);
+    } else if (mostlyBlocked) {
       p = cardioShort ? cardioPickSafe() : { kind: "rest", title: "Rest or light mobility", note: "" };
       why.push(`every routine leans on what you noted (${jointIssues.map(i => JOINT_NAMES[i.k.slice(6)]).join(", ")}), so lifting can wait a day`);
     } else {
-      const pick = built || order.find(r => ok(r) && !tiredIn(r).length) || order.find(ok) || order.find(r => !tiredIn(r).length) || order[0];
+      const pick = built || cands.find(r => ok(r) && !tiredIn(r).length) || cands.find(ok) || cands.find(r => !tiredIn(r).length) || cands[0];
+      if (worked) why.push(`you lifted yesterday, but you're ${short} lifts short of your week, so today works other muscles and leaves ${muscleList([...worked])} to recover`);
       if (built) why.push(...built.why);
       p = { kind: "lift", routine: pick, title: pick.name, deload: dl, note: dl ? "Deload week: half the sets at about 90% of your weight. Stop every set with 3–4 reps left."
         : low ? "Readiness is low: Start drops a set from each exercise and holds your weights. Skip grinders."
         : tiredNote ? "You noted feeling tired: Start drops a set from each exercise. Keep it moderate, no grinders."
         : tr.hrvDown || tr.rhrUp ? "Lift as planned, but hold your weights. No PR attempts while HRV is below your usual."
+        : worked ? "Second lifting day running: stop each set 2–3 reps short of failure, so you recover in time for the next one."
         : h.readiness >= 75 ? "You're well recovered. Good day to push the top of your rep ranges." : "" };
+      if (worked) p.b2b = true;
       p.trim = dl ? null : trimReason(day);
       const add = addonFor(); if (add) p.addon = add;
       if (built) {}
-      else if (pick !== order[0]) {
-        const r0 = order[0], b0 = blockedIn(r0), t0 = tiredIn(r0);
+      else if (pick !== cands[0]) {
+        const r0 = cands[0], b0 = blockedIn(r0), t0 = tiredIn(r0);
         why.push(`${esc(r0.name)} is next in rotation, but ${b0.length ? `${b0.map(esc).join(", ")} ${b0.length > 1 ? "aren't" : "isn't"} a good idea with your ${jointIssues.map(i => JOINT_NAMES[i.k.slice(6)]).join("/")}` : `${t0.map(m => MUSCLES[m].n.toLowerCase()).join(", ")} still need recovery`}`);
       } else if (tiredIn(pick).length) why.push(`every routine hits something still tired (${tiredIn(pick).map(m => MUSCLES[m].n.toLowerCase()).join(", ")}). Go lighter there`);
       const bp = built ? [] : blockedIn(pick);
@@ -1447,7 +1474,7 @@ function planDay(day) {
     if (last && metMins(todayMins, want)) p = { kind: "done", title: `Cardio done: ${last.name}`, note: `${todayMins} min.`, cardio: last };
     else p = { ...p, partial: { done: todayMins, want }, title: `Partly done: ${todayMins} of ${want}′`, note: `${p.title}. ${want - todayMins} more min if you feel like it${z2Text()}.${last ? " It already counts as a session." : ""}` };
   }
-  p.alts = order.filter(r => r !== p.routine);
+  p.alts = (p.b2b ? order.filter(r => !r.items.some(it => hitsWorked(it.ex, worked).length)) : order).filter(r => r !== p.routine);
   p.why = why;
   return p;
 }
@@ -1635,6 +1662,13 @@ function similarEx(exId, day, ctx = adviceCtx(day), n = 4) {
 
 function buildSession(day) {
   const ctx = adviceCtx(day), why = [], items = [], picked = [];
+  // Main lifts and accessories skip muscles that need the day: worked hard yesterday (see workedYesterday), or noted as sore
+  const worked = liftedOn(addDays(day, -1)) ? workedYesterday(day) : null;
+  const sore = new Set(ctx.issues.filter(i => i.k.startsWith("sore:")).map(i => i.k.slice(5)));
+  const avoid = worked || sore.size ? new Set([...(worked || []), ...sore]) : null;
+  const soreHit = id => Object.entries(exById(id).muscles).filter(([m, w]) => w >= .75 && sore.has(m)).map(([m]) => m);
+  const avoidHits = id => [...new Set([...hitsWorked(id, worked), ...soreHit(id)])];
+  const fresh = id => !avoidHits(id).length;
   const used = {}; for (const x of allDoneSets(x => x.day < day)) used[x.ex.id] = (used[x.ex.id] || 0) + 1;
   // Last day a movement was trained. A balanced session records its main slots (session.slots), so its accessories
   // (a single-leg RDL on a squat day) don't count as that movement's turn.
@@ -1656,7 +1690,8 @@ function buildSession(day) {
   };
   const lagK = new Set(strengthLevels(day).groups.filter(g => g.lag).map(g => g.k));
   const ok = (id, maxLvl) => canDo(id) && exerciseAdvice(id, day, { ...ctx, noAlts: true }).lvl <= maxLvl;
-  const pickIn = (sub, maxLvl) => ranked(sub, used).find(id => !skipped(id) && ok(id, maxLvl));
+  const pickIn = (sub, maxLvl) => ranked(sub, used).find(id => !skipped(id) && ok(id, maxLvl) && fresh(id));
+  const pickIn0 = sub => ranked(sub, used).find(id => !skipped(id) && ok(id, 1)) || SLOT_SUBS[sub][1][0];
   const tired = id => Object.entries(exById(id).muscles).some(([m, w]) => w >= 1 && readiness(ctx.fat[m]) === "fat");
   for (const pair of SESSION_SLOTS) {
     const opts = pair.map(sub => {
@@ -1666,7 +1701,13 @@ function buildSession(day) {
       return { sub, id, score: since + (lagK.has(SLOT_SUBS[sub][2]) ? 4 : 0) - (tired(id) ? 10 : 0), since, last };
     }).sort((a, b) => b.score - a.score);
     const o = opts[0];
-    if (!o.id) continue;
+    if (!o.id) {
+      if (avoid && pair.some(sub => ranked(sub, used).some(id => !skipped(id) && ok(id, 1)))) {
+        const ms = [...new Set(pair.flatMap(sub => avoidHits(pickIn0(sub))))], y = ms.filter(m => worked?.has(m)), so = ms.filter(m => !worked?.has(m));
+        why.push(`${pair.map(sub => SLOT_SUBS[sub][0].toLowerCase()).join(" and ")}: rested today, ${[y.length && `since you worked ${muscleList(y)} yesterday`, so.length && `to spare your sore ${muscleList(so)}`].filter(Boolean).join(" and ")}`);
+      }
+      continue;
+    }
     picked.push(o.sub);
     items.push({ ex: o.id, ...numbers(o.id, true), w: 0 });
     why.push(`${SLOT_SUBS[o.sub][0].toLowerCase()}: ${o.last ? `last done ${agoText(o.last, day)}` : "not done recently"}${lagK.has(SLOT_SUBS[o.sub][2]) ? ", and it's behind your other movements" : ""}`);
@@ -1682,7 +1723,7 @@ function buildSession(day) {
   for (const it of items) for (const [m, w] of Object.entries(exById(it.ex).muscles)) if (proj[m] != null) proj[m] += w * it.sets;
   const lastDone = {}; for (const x of allDoneSets(x => x.day < day)) if (!(lastDone[x.ex.id] >= x.day)) lastDone[x.ex.id] = x.day;
   const mainIds = new Set(picked.flatMap(k => SLOT_SUBS[k][1]));   // no goblet squat after a split squat: a second helping of the same movement isn't an accessory
-  const free = id => !items.some(x => x.ex === id) && !mainIds.has(id) && !skipped(id) && ok(id, 0);
+  const free = id => !items.some(x => x.ex === id) && !mainIds.has(id) && !skipped(id) && ok(id, 0) && fresh(id);
   // Its main muscles are fresh enough, and these sets keep them inside the weekly range
   const room = (id, sets) => Object.entries(exById(id).muscles).every(([m, w]) => w < 1 || proj[m] == null || (readiness(ctx.fat[m]) !== "fat" && proj[m] + sets <= MUSCLES[m].hi));
   const lname = id => esc(exById(id).name.toLowerCase());
@@ -1709,7 +1750,7 @@ function buildSession(day) {
   let liftsDone = 0; for (let i = 1; i <= 6; i++) if (liftedOn(addDays(day, -i))) liftsDone++;
   const left = Math.max(1, ({ ...WEEK_DEFAULT, ...(S.settings.week || {}) }).lifts - liftsDone);
   const need = m => MUSCLES[m].lo - proj[m];
-  const gaps = Object.keys(MUSCLES).filter(m => MUSCLES[m].lo > 0 && readiness(ctx.fat[m]) !== "fat" && need(m) >= 2).sort((a, b) => need(b) - need(a));
+  const gaps = Object.keys(MUSCLES).filter(m => MUSCLES[m].lo > 0 && readiness(ctx.fat[m]) !== "fat" && !avoid?.has(m) && need(m) >= 2).sort((a, b) => need(b) - need(a));
   // Among the exercises for a muscle: favourites, then the most direct, then the one you've gone longest without (ones you've never done come last)
   const turn = id => lastDone[id] || "9";
   for (const m of gaps) {
@@ -1722,7 +1763,9 @@ function buildSession(day) {
     add(pick.id, numbers(pick.id, false), Math.max(2, Math.min(3, Math.ceil(need(m) / left))), `${lname(pick.id)}: ${MUSCLES[m].n.toLowerCase()} at ${at} of ${MUSCLES[m].lo}+ sets this week`);
     acc++;
   }
-  const name = picked.length ? "Full body: " + picked.map((k, i) => i ? SLOT_SUBS[k][0].toLowerCase() : SLOT_SUBS[k][0]).join(", ") : AUTO.name;
+  // Every main movement rested: what's left is core and small-muscle work, so say that rather than "Balanced"
+  const name = picked.length ? (picked.length < SESSION_SLOTS.length && avoid ? "Split: " : "Full body: ") + picked.map((k, i) => i ? SLOT_SUBS[k][0].toLowerCase() : SLOT_SUBS[k][0]).join(", ")
+    : items.length ? "Light day: core and accessories" : AUTO.name;
   return { ...AUTO, name, items, why, slots: picked };
 }
 
@@ -1778,8 +1821,11 @@ function coach(day) {
     msgs.push({ k: "today", lvl: "bad", t: `You described your <b>${esc(issueLabel({ ...is, sev: 0 }).toLowerCase())}</b> as more than an ache (sharp, swollen or tweaked). Don't train through that. Rest it, and if it isn't clearly better in a few days, get it checked by a physio or doctor.` });
   // What to do today (flexible week)
   const plan = planDay(day);
-  if (sess?.entries?.length && liftedOn(addDays(day, -1)))
-    msgs.push({ k: "today", lvl: "warn", t: `You lifted yesterday too. Lifting days are kept apart so each one can recover. If you go ahead, keep it light.` });
+  if (sess?.entries?.length && liftedOn(addDays(day, -1))) {
+    // Two lifting days running is fine for different muscles; warn only about the ones worked hard yesterday
+    const again = [...new Set(sess.entries.flatMap(e => hitsWorked(e.ex, workedYesterday(day))))];
+    if (again.length) msgs.push({ k: "today", lvl: "warn", t: `${srcBtn("b2b")} You worked your <b>${muscleList(again)}</b> hard yesterday too. Muscles need about a day or two to recover, so keep those sets light and well short of failure.` });
+  }
 
   // Deload: a lighter week every 5–6 weeks (plan rule), or sooner when warning signs pile up
   const dl = deloadOn(day), due = isToday && deloadDue(day);
@@ -2269,7 +2315,11 @@ function openElse() {
   const row = (attrs, t, d, pill = "") => `<button class="exrow" ${attrs}><div class="l"><div>${t}</div><div class="small muted">${d}</div></div>${pill || `<span class="chev" aria-hidden="true">›</span>`}</button>`;
   const rows = [];
   if (adapt?.changes.length) rows.push(row(`data-act="routine" data-raw="1" data-id="${esc(p.routine.id)}"`, `${esc(p.routine.name)} as written`, "Without today's adjustments"));
-  if (!p.routine?.auto) rows.push(row(`data-act="routine" data-id="auto"`, "Balanced session", "Built for today: a lower, a push and a pull movement, plus what's short this week"));
+  if (!p.routine?.auto) {
+    const bs = buildSession(day);
+    if (bs.items.length) rows.push(row(`data-act="routine" data-id="auto"`, esc(bs.name), bs.items.map(it => esc(exById(it.ex).name)).join(" · ")));
+    else rows.push(`<div class="exrow" aria-disabled="true"><div class="l"><div class="muted">Balanced session</div><div class="small muted">Nothing fits today: every movement works muscles that need the day. Pick a routine or build your own if you still want to lift.</div></div></div>`);
+  }
   c.routineScores.forEach((x, i) => { if (x.r.id === p.routine?.id) return;
     rows.push(row(`data-act="routine" data-id="${esc(x.r.id)}"`, esc(x.r.name), x.r.items.map(it => esc(exById(it.ex).name)).join(" · "), i === 0 ? `<span class="pill good">Best fit today</span>` : x.score < 0 ? `<span class="pill bad">Muscles tired</span>` : "")); });
   rows.push(row(`data-act="openadd"`, "Build your own", "Add exercises one at a time"));
@@ -3114,7 +3164,7 @@ function renderSettings() {
   if (page === "week") return `${back}
     <section class="block">
       <h2>Week targets</h2>
-      <p class="small muted" style="margin:0">No fixed days. Each morning the coach picks lift, cardio or rest from the last 7 days and how recovered you are. Lifting days are never back to back. How the week is going is on the Week tab.</p>
+      <p class="small muted" style="margin:0">No fixed days. Each morning the coach picks lift, cardio or rest from the last 7 days and how recovered you are. Lifting days are usually kept apart; when you've fallen behind, the day after a lift can be one for the muscles you didn't train. How the week is going is on the Week tab.</p>
       ${weekTargetRows()}
     </section>`;
   if (page === "sessions") {
@@ -3483,6 +3533,10 @@ const SOURCES = {
     "With a birth year set, the standards are adjusted outside ages 23–39 using powerlifting's age coefficients (McCulloch for 40 and over, Foster for juniors): at 50 a lift counts about 13% more, at 60 about 34%."],
     refs: [["ExRx strength standards (Kilgore)", "https://exrx.net/Questions/StrengthTests"], ["van den Hoek et al. 2024, powerlifting norms from 809,986 entries (JSAMS)", "https://pubmed.ncbi.nlm.nih.gov/39060209/"], ["Strength Level, community standards", "https://strengthlevel.com/strength-standards"], ["McCulloch masters age coefficients (APF table)", "https://worldpowerliftingcongress.com/wp-content/uploads/2015/02/Glossbrenner.htm"]] },
 };
+SOURCES.b2b = { t: "Lifting two days running", p: [
+    "When the weekly sets are the same, spreading them over more days gives about the same strength and size as fewer, longer sessions. In one trial, 3 and 6 sessions a week did equally well. So lifting the day after a lift isn't a problem in itself.",
+    "What needs rest is the muscle. Sets taken to failure slow recovery for 24–48 hours, so the same muscles trained hard again the next day start the session tired. Iron Ledger allows a second day running when you've fallen behind, keeps it to the muscles you didn't work hard yesterday, and suggests stopping sets a few reps short."],
+    refs: [["Saric et al. 2019, training 3 vs 6 times a week (J Strength Cond Res)", "https://pubmed.ncbi.nlm.nih.gov/30363041/"], ["Morán-Navarro et al. 2017, recovery after sets to failure or not (Eur J Appl Physiol)", "https://doi.org/10.1007/s00421-017-3725-7"], ["Pelland et al. 2024, volume and frequency dose–response (SportRxiv)", "https://sportrxiv.org/index.php/server/preprint/view/537"]] };
 SOURCES.variety = { t: "Changing exercises", p: [
   "Swapping one exercise for another that trains the same muscles doesn't cost you size or strength, and it can help: in a trial where trained men got a random set of exercises each session, gains were about the same as sticking with one set, and they enjoyed training more. A 2024 trial in women found the same.",
   "A systematic review adds the nuance: some <b>planned</b> variation (different angles for the same muscle) can spread growth more evenly across a muscle, while frequent, random switching can hold back gains, especially on skill-heavy lifts like the squat, where getting better at the movement is part of getting stronger.",

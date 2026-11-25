@@ -1414,8 +1414,9 @@ function planDay(day) {
   };
 
   // Lifted yesterday: can today still be a lift? (b2bNo = why not)
-  const worked = lastLift === yest ? workedYesterday(day) : null, short = wk.lifts - liftDays.length;
-  const b2bNo = !worked ? null
+  // liftedYest: any lift yesterday (the b2b rules apply). worked: the muscles it hit hard, or null when none did (a light day)
+  const liftedYest = lastLift === yest, w0 = liftedYest ? workedYesterday(day) : null, worked = w0?.size ? w0 : null, short = wk.lifts - liftDays.length;
+  const b2bNo = !liftedYest ? null
     : liftedOn(addDays(day, -2)) ? "you've lifted two days running, so a third waits"
     : short < 2 ? "you lifted yesterday and the week is on pace, so lifting days stay apart"
     : isNewcomer(day) ? "you lifted yesterday, and while lifts are new to you they leave you sore for longer, so lifting days stay apart"
@@ -1437,14 +1438,18 @@ function planDay(day) {
     const built = autoMode() ? buildSession(day) : null;
     // The day after a lift, only sessions that rest yesterday's muscles: routines with no main lift on them, or a built session with 2+ main lifts left
     const cands = worked ? order.filter(r => !r.items.some(it => hitsWorked(it.ex, worked).length)) : order;
-    const noSplit = worked && (built ? built.slots.length < 2 : !cands.length);
+    // No split only when yesterday's muscles are what emptied it (a slot lost to gear or your skip list isn't yesterday's fault)
+    const noSplit = worked && (built ? built.slots.length < 2 && built.rested.worked.length > 0 : !cands.length);
     const mostlyBlocked = built ? built.items.length < 2 : cands.every(r => blockedIn(r).length * 2 >= r.items.length);
     if (noSplit) {
       p = cardioShort ? cardioPickSafe() : { kind: "rest", title: "Rest or light mobility", note: "" };
-      why.push(`you lifted yesterday, and ${built ? "a session" : "every routine"} today would work ${muscleList([...worked])} again before they've recovered`);
+      why.push(`you lifted yesterday, and ${built ? "a session" : "every routine"} today would work ${muscleList(built ? built.rested.worked : [...worked])} again before they've recovered`);
     } else if (mostlyBlocked) {
       p = cardioShort ? cardioPickSafe() : { kind: "rest", title: "Rest or light mobility", note: "" };
-      why.push(`every routine leans on what you noted (${jointIssues.map(i => JOINT_NAMES[i.k.slice(6)]).join(", ")}), so lifting can wait a day`);
+      const joints = jointIssues.map(i => JOINT_NAMES[i.k.slice(6)]), sore = built?.rested.sore || [], yday = built?.rested.worked || [];
+      const parts = [joints.length && `your ${joints.join(", ")}`, sore.length && `sore ${muscleList(sore)}`, yday.length && `${muscleList(yday)} from yesterday`].filter(Boolean);
+      why.push(parts.length ? `${built ? "today's session" : "every routine"} leans on what needs the day (${parts.join("; ")}), so lifting can wait a day`
+        : "too few exercises fit your gear and skip lists today for a session, so lifting can wait a day");
     } else {
       const pick = built || cands.find(r => ok(r) && !tiredIn(r).length) || cands.find(ok) || cands.find(r => !tiredIn(r).length) || cands[0];
       if (worked) why.push(`you lifted yesterday, but you're ${short} lifts short of your week, so today works other muscles and leaves ${muscleList([...worked])} to recover`);
@@ -1453,15 +1458,15 @@ function planDay(day) {
         : low ? "Readiness is low: Start drops a set from each exercise and holds your weights. Skip grinders."
         : tiredNote ? "You noted feeling tired: Start drops a set from each exercise. Keep it moderate, no grinders."
         : tr.hrvDown || tr.rhrUp ? "Lift as planned, but hold your weights. No PR attempts while HRV is below your usual."
-        : worked ? "Second lifting day running: stop each set 2–3 reps short of failure, so you recover in time for the next one."
+        : liftedYest ? "Second lifting day running: stop each set 2–3 reps short of failure, so you recover in time for the next one."
         : h.readiness >= 75 ? "You're well recovered. Good day to push the top of your rep ranges." : "" };
-      if (worked) p.b2b = true;
+      if (liftedYest) p.b2b = true;
       p.trim = dl ? null : trimReason(day);
       const add = addonFor(); if (add) p.addon = add;
       if (built) {}
       else if (pick !== cands[0]) {
         const r0 = cands[0], b0 = blockedIn(r0), t0 = tiredIn(r0);
-        why.push(`${esc(r0.name)} is next in rotation, but ${b0.length ? `${b0.map(esc).join(", ")} ${b0.length > 1 ? "aren't" : "isn't"} a good idea with your ${jointIssues.map(i => JOINT_NAMES[i.k.slice(6)]).join("/")}` : `${t0.map(m => MUSCLES[m].n.toLowerCase()).join(", ")} still need recovery`}`);
+        why.push(`${esc(r0.name)} is ${r0 === order[0] ? "next in rotation" : "next of the routines that rest yesterday's muscles"}, but ${b0.length ? `${b0.map(esc).join(", ")} ${b0.length > 1 ? "aren't" : "isn't"} a good idea with your ${jointIssues.map(i => JOINT_NAMES[i.k.slice(6)]).join("/")}` : `${t0.map(m => MUSCLES[m].n.toLowerCase()).join(", ")} still need recovery`}`);
       } else if (tiredIn(pick).length) why.push(`every routine hits something still tired (${tiredIn(pick).map(m => MUSCLES[m].n.toLowerCase()).join(", ")}). Go lighter there`);
       const bp = built ? [] : blockedIn(pick);
       if (bp.length) why.push(`swap ${bp.map(esc).join(", ")}: each one's card suggests an alternative`);
@@ -1475,6 +1480,7 @@ function planDay(day) {
     else p = { ...p, partial: { done: todayMins, want }, title: `Partly done: ${todayMins} of ${want}′`, note: `${p.title}. ${want - todayMins} more min if you feel like it${z2Text()}.${last ? " It already counts as a session." : ""}` };
   }
   p.alts = (p.b2b ? order.filter(r => !r.items.some(it => hitsWorked(it.ex, worked).length)) : order).filter(r => r !== p.routine);
+  p.b2bNo = b2bNo;   // read by the coach when you lift anyway
   p.why = why;
   return p;
 }
@@ -1662,8 +1668,9 @@ function similarEx(exId, day, ctx = adviceCtx(day), n = 4) {
 
 function buildSession(day) {
   const ctx = adviceCtx(day), why = [], items = [], picked = [];
+  const rested = { worked: new Set(), sore: new Set() };   // muscles that actually cost a main slot today, by reason
   // Main lifts and accessories skip muscles that need the day: worked hard yesterday (see workedYesterday), or noted as sore
-  const worked = liftedOn(addDays(day, -1)) ? workedYesterday(day) : null;
+  const w0 = liftedOn(addDays(day, -1)) ? workedYesterday(day) : null, worked = w0?.size ? w0 : null;
   const sore = new Set(ctx.issues.filter(i => i.k.startsWith("sore:")).map(i => i.k.slice(5)));
   const avoid = worked || sore.size ? new Set([...(worked || []), ...sore]) : null;
   const soreHit = id => Object.entries(exById(id).muscles).filter(([m, w]) => w >= .75 && sore.has(m)).map(([m]) => m);
@@ -1704,6 +1711,7 @@ function buildSession(day) {
     if (!o.id) {
       if (avoid && pair.some(sub => ranked(sub, used).some(id => !skipped(id) && ok(id, 1)))) {
         const ms = [...new Set(pair.flatMap(sub => avoidHits(pickIn0(sub))))], y = ms.filter(m => worked?.has(m)), so = ms.filter(m => !worked?.has(m));
+        y.forEach(m => rested.worked.add(m)); so.forEach(m => rested.sore.add(m));
         why.push(`${pair.map(sub => SLOT_SUBS[sub][0].toLowerCase()).join(" and ")}: rested today, ${[y.length && `since you worked ${muscleList(y)} yesterday`, so.length && `to spare your sore ${muscleList(so)}`].filter(Boolean).join(" and ")}`);
       }
       continue;
@@ -1764,9 +1772,10 @@ function buildSession(day) {
     acc++;
   }
   // Every main movement rested: what's left is core and small-muscle work, so say that rather than "Balanced"
-  const name = picked.length ? (picked.length < SESSION_SLOTS.length && avoid ? "Split: " : "Full body: ") + picked.map((k, i) => i ? SLOT_SUBS[k][0].toLowerCase() : SLOT_SUBS[k][0]).join(", ")
+  const restedAny = rested.worked.size + rested.sore.size > 0;
+  const name = picked.length ? (picked.length < SESSION_SLOTS.length && restedAny ? "Split: " : "Full body: ") + picked.map((k, i) => i ? SLOT_SUBS[k][0].toLowerCase() : SLOT_SUBS[k][0]).join(", ")
     : items.length ? "Light day: core and accessories" : AUTO.name;
-  return { ...AUTO, name, items, why, slots: picked };
+  return { ...AUTO, name, items, why, slots: picked, rested: { worked: [...rested.worked], sore: [...rested.sore] } };
 }
 
 // Look-ahead: replay planDay over the next n days, pretending each suggestion gets done. Nothing is saved.
@@ -1823,8 +1832,10 @@ function coach(day) {
   const plan = planDay(day);
   if (sess?.entries?.length && liftedOn(addDays(day, -1))) {
     // Two lifting days running is fine for different muscles; warn only about the ones worked hard yesterday
-    const again = [...new Set(sess.entries.flatMap(e => hitsWorked(e.ex, workedYesterday(day))))];
-    if (again.length) msgs.push({ k: "today", lvl: "warn", t: `${srcBtn("b2b")} You worked your <b>${muscleList(again)}</b> hard yesterday too. Muscles need about a day or two to recover, so keep those sets light and well short of failure.` });
+    const wy = workedYesterday(day), again = [...new Set(sess.entries.flatMap(e => hitsWorked(e.ex, wy)))];
+    // The plan said no lift today (third day running, on pace, new to lifting, recovery down): say so even when the muscles differ
+    if (plan.b2bNo) msgs.push({ k: "today", lvl: "warn", t: `${srcBtn("b2b")} The plan had today as a day off lifting: ${esc(plan.b2bNo)}. Keep today's sets light and well short of failure.` });
+    else if (again.length) msgs.push({ k: "today", lvl: "warn", t: `${srcBtn("b2b")} You worked your <b>${muscleList(again)}</b> hard yesterday too. Muscles need about a day or two to recover, so keep those sets light and well short of failure.` });
   }
 
   // Deload: a lighter week every 5–6 weeks (plan rule), or sooner when warning signs pile up
@@ -1995,14 +2006,17 @@ function coach(day) {
   // Suggestions: fresh muscles with the biggest weekly gap
   const gaps = dl ? [] : Object.keys(MUSCLES).filter(m => MUSCLES[m].lo > 0 && readiness(fatNow[m]) === "fresh")
     .map(m => ({ m, gap: MUSCLES[m].lo - wk[m] })).filter(x => x.gap > 0).sort((a, b) => b.gap - a.gap).slice(0, 4);
+  // Routines that would work yesterday's hard-hit muscles again sink to the bottom and never get "Best fit today"
+  const wyS = !liftedOn(day) && liftedOn(addDays(day, -1)) ? workedYesterday(day) : null, wyR = wyS?.size ? wyS : null;
   const routineScores = Object.values(S.routines).map(r => {
     let score = 0;
     for (const it of r.items) for (const [m, w] of Object.entries(exById(it.ex).muscles)) {
       const rd = readiness(fatNow[m]);
       score += w * (rd === "fresh" ? 1 : rd === "rec" ? -.5 : -2) + (w * Math.max(0, MUSCLES[m]?.lo - wk[m]) / 10);
     }
-    return { r, score: score / Math.max(1, r.items.length) };
-  }).sort((a, b) => b.score - a.score);
+    const again = [...new Set(r.items.flatMap(it => hitsWorked(it.ex, wyR)))];
+    return { r, score: score / Math.max(1, r.items.length), again };
+  }).sort((a, b) => (a.again.length > 0) - (b.again.length > 0) || b.score - a.score);
   const usedCount = {};
   for (const x of allDoneSets()) usedCount[x.ex.id] = (usedCount[x.ex.id] || 0) + 1;
   const exSuggest = [];
@@ -2318,10 +2332,10 @@ function openElse() {
   if (!p.routine?.auto) {
     const bs = buildSession(day);
     if (bs.items.length) rows.push(row(`data-act="routine" data-id="auto"`, esc(bs.name), bs.items.map(it => esc(exById(it.ex).name)).join(" · ")));
-    else rows.push(`<div class="exrow" aria-disabled="true"><div class="l"><div class="muted">Balanced session</div><div class="small muted">Nothing fits today: every movement works muscles that need the day. Pick a routine or build your own if you still want to lift.</div></div></div>`);
+    else rows.push(`<div class="exrow" aria-disabled="true"><div class="l"><div class="muted">Balanced session</div><div class="small muted">Nothing fits today: ${bs.rested.worked.length || bs.rested.sore.length ? "every movement works muscles that need the day" : "no main lift fits your gear and skip lists"}. Pick a routine or build your own if you still want to lift.</div></div></div>`);
   }
   c.routineScores.forEach((x, i) => { if (x.r.id === p.routine?.id) return;
-    rows.push(row(`data-act="routine" data-id="${esc(x.r.id)}"`, esc(x.r.name), x.r.items.map(it => esc(exById(it.ex).name)).join(" · "), i === 0 ? `<span class="pill good">Best fit today</span>` : x.score < 0 ? `<span class="pill bad">Muscles tired</span>` : "")); });
+    rows.push(row(`data-act="routine" data-id="${esc(x.r.id)}"`, esc(x.r.name), x.r.items.map(it => esc(exById(it.ex).name)).join(" · "), x.again.length ? `<span class="pill warn">Worked yesterday</span>` : i === 0 ? `<span class="pill good">Best fit today</span>` : x.score < 0 ? `<span class="pill bad">Muscles tired</span>` : "")); });
   rows.push(row(`data-act="openadd"`, "Build your own", "Add exercises one at a time"));
   if (p.kind !== "cardio") rows.push(row(`data-act="cl-open"`, "Cardio instead", "Log a run, row, ride or walk"));
   $("#sheet").innerHTML = sheetHtml("Something else", (lift ? "" : `<p class="small muted" style="margin:4px 0">The coach suggests ${p.kind === "cardio" ? "cardio" : "rest"} today. Lifting anyway is your call.</p>`) + rows.join(""));
@@ -3453,7 +3467,7 @@ function openRoutines() {
   const c = coach(S.day);
   $("#sheet").innerHTML = `<div class="sheet-bg" data-act="closesheet"><div class="sheet" role="dialog" aria-label="Start routine">
     <div class="sh"><div style="display:flex;justify-content:space-between;align-items:center"><h2>Start routine</h2><button class="x iconbtn" data-act="closesheet" aria-label="Close">×</button></div></div>
-    <div class="sb">${c.routineScores.map((x, i) => `<button class="exrow" data-act="routine" data-id="${esc(x.r.id)}"><div class="l"><div>${esc(x.r.name)}</div><div class="small muted">${x.r.items.map(it => esc(exById(it.ex).name)).join(" · ")}</div></div>${i === 0 ? `<span class="pill good">Best fit today</span>` : x.score < 0 ? `<span class="pill bad">Muscles tired</span>` : ""}</button>`).join("")}</div>
+    <div class="sb">${c.routineScores.map((x, i) => `<button class="exrow" data-act="routine" data-id="${esc(x.r.id)}"><div class="l"><div>${esc(x.r.name)}</div><div class="small muted">${x.r.items.map(it => esc(exById(it.ex).name)).join(" · ")}</div></div>${x.again.length ? `<span class="pill warn">Worked yesterday</span>` : i === 0 ? `<span class="pill good">Best fit today</span>` : x.score < 0 ? `<span class="pill bad">Muscles tired</span>` : ""}</button>`).join("")}</div>
   </div></div>`;
 }
 // Closing the exercise picker while editing a routine goes back to the editor; force closes everything

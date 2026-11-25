@@ -566,6 +566,31 @@ function run() {
       const m = coach(today).msgs.find(m => m.t.includes("hard yesterday")); ok(m && m.t.includes("quads"), "no warning");
     });
   });
+  // A light lift yesterday (no muscle at 3 sets) leaves nothing to name: no blank muscle lists, and nothing blamed on it
+  const lightY = session(ago(1), entry("db_curl", 20, 10, "solid", 2));
+  test("b2b: a light lift yesterday leaves no blank muscle list", () => scene({ sessions: { ...oldLifts, ...lightY }, routines: lowerUpper, settings: rGear }, () => {
+    const p = planDay(today); ok(p.why.every(w => !/ {2}|\(\)/.test(w)), p.why.join(" | "));
+  }));
+  test("b2b: a short balanced session isn't blamed on a light day yesterday", () => scene({ sessions: { ...oldLifts, ...lightY },
+    settings: { ...dbGear, prefs: { skip: { "move:squat": { k: "never" }, "move:hinge": { k: "never" }, "move:hpress": { k: "never" }, "move:vpress": { k: "never" } } } } }, () => {
+    const p = planDay(today); ok(!p.why.some(w => w.includes("again before")), p.why.join(" | ")); ok(p.why.every(w => !/ {2}|\(\)/.test(w)), p.why.join(" | "));
+  }));
+  test("b2b: lifting on a third day running gets a warning, even for fresh muscles", () => scene({
+    sessions: { ...oldLifts, ...lowerY, ...session(ago(2), entry("db_bench", 40, 8)), ...session(today, entry("db_row", 40, 8)) }, routines: lowerUpper, settings: { ...rGear, week: { lifts: 5, cardio: 0, cardioMin: 0 } } }, () => {
+    ok(coach(today).msgs.some(m => m.t.includes("day off lifting") && m.t.includes("third")), "no warning");
+  }));
+  test("b2b: Something else ranks yesterday's routine last, never Best fit", () => scene({ sessions: { ...oldLifts, ...lowerY }, routines: lowerUpper, settings: rGear }, () => {
+    const rs = coach(today).routineScores; eq(rs[0].r.id, "upper"); eq(rs[rs.length - 1].r.id, "lower"); ok(rs[rs.length - 1].again.length, "not flagged");
+  }));
+  test("sore: an emptied session names the sore muscles, not an empty joint list", () => scene({
+    sessions: { ...oldLifts, [today]: { date: today, entries: [], issues: ["chest", "lats", "upperBack", "quads", "glutes", "hamstrings", "frontDelt", "abs", "obliques", "biceps", "triceps", "calves", "sideDelt", "rearDelt"].map(m => ({ k: "sore:" + m, sev: 1 })) } }, settings: dbGear }, () => {
+    const p = planDay(today); ok(p.why.every(w => !w.includes("()")), p.why.join(" | "));
+    if (p.kind !== "lift") ok(p.why.some(w => w.includes("sore ")), p.why.join(" | "));
+  }));
+  test("balanced: a slot lost to the skip list doesn't make a sore note a Split", () => scene({
+    sessions: { ...oldLifts, [today]: { date: today, entries: [], issues: [{ k: "sore:calves", sev: 1 }] } }, settings: { ...dbGear, prefs: { skip: { "move:hpress": { k: "never" }, "move:vpress": { k: "never" } } } } }, () => {
+    const b = buildSession(today); ok(b.name.startsWith("Full body"), b.name);
+  }));
 
   test("sore: a noted sore muscle is left out of the balanced session", () => scene({ sessions: { ...oldLifts, [today]: { date: today, entries: [], issues: [{ k: "sore:hamstrings", sev: 1 }] } }, settings: dbGear }, () => {
     const b = buildSession(today);

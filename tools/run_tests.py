@@ -6,7 +6,7 @@ import functools, http.server, json, os, subprocess, sys, tempfile, threading
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 TIMEOUT = 60
-PAGES = [("", "tests/index.html")] + [(f"sync {s}", f"tests/sync/index.html?s={s}") for s in ("adopt", "fresh", "del-old", "del-fail")] + [("worker", "tests/worker.html")]
+PAGES = [("", "tests/index.html")] + [(f"sync {s}", f"tests/sync/index.html?s={s}") for s in ("adopt", "fresh", "del-old", "del-fail", "merge", "restore")] + [("worker", "tests/worker.html")]
 
 def run(page):
     got, done = [], threading.Event()

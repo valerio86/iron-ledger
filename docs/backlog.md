@@ -7,6 +7,7 @@ Deliberately not planned: food or calorie logging, a rest timer, phone reminders
 ## Features
 
 - **"What would it unlock?" for gear you don't own.** In Setup → Equipment, list what each missing item opens up (a rack: back squat, bench, inverted rows), with lagging movements first. It builds on `NEEDS`, `SLOT_SUBS` and the strength levels.
+- **Theme switch (System / Light / Dark).** A light theme already exists and follows the phone's setting. styles.css also honours `data-theme="light|dark"` on `<html>`, but nothing sets it yet. To build: a three-way choice in Setup, kept per device in localStorage (not synced: a phone and a laptop can reasonably differ). Apply it in a small inline script in index.html before first paint, so the page doesn't flash, and update `<meta name="theme-color">` to match. Then check every screen and chart in both themes, especially light mode, which has had less use.
 - **Post sessions to Strava.** Send a finished lifting session out as a Weight Training activity, with the exercises in the description. It needs the `activity:write` scope (users reconnect once) and a new worker endpoint.
 
 ## Loose ends

@@ -4010,6 +4010,10 @@ document.addEventListener("change", async ev => {
   try { docs = backupDocs(JSON.parse(await f.text())); } catch {}
   if (!docs) { toast("That file isn't an Iron Ledger backup."); return; }
   const n = Object.keys(docs).filter(k => k.startsWith("sessions/")).length;
-  if (!confirm(`Replace everything on this device with the backup (${n} training days)?`)) return;
+  // Strava and Garmin connections aren't part of a backup's history: keep them
+  for (const [k, v] of Object.entries(DB.dump())) if (k.startsWith("connectors/") && !(k in docs)) docs[k] = v;
+  const acct = window.Sync?.state.user;
+  if (!confirm(acct ? `Replace your whole log with the backup (${n} training days)? This changes your account too, so every signed-in device gets the backup. Anything logged after it was made will be deleted.`
+    : `Replace everything on this device with the backup (${n} training days)? Anything logged after it was made will be deleted.`)) return;
   try { await DB.restore(docs); toast(`Restored ${n} days`); } catch (e) { toast(saveErr(e)); }
 });

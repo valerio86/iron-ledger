@@ -111,6 +111,19 @@ const LocalStore = (() => {
       rows.forEach(([p]) => notify(p));
       return rows.length;
     },
+    // First sign-in on this device, into an account that already has data: the account's copy replaces this device's
+    // for every doc both have (rows as for commit), so a fresh setup here doesn't overwrite the account
+    async adopt(rows) {
+      if (!rows.length) return;
+      await commit(rows);
+      rows.forEach(([p]) => notify(p));
+    },
+    // The cloud copy was lost (account deletion stopped halfway): treat everything here as new so it goes up again
+    async unsyncAll() {
+      const at = Date.now();
+      await commit([...mem.keys()].map(p => [p, mem.get(p), { at, del: false, synced: false }]));
+    },
+    peek: p => structuredClone(mem.get(p)),
     kv: k => meta.get("kv:" + k),
     async setKv(k, v) { meta.set("kv:" + k, v); const tx = idb.transaction(META, "readwrite"); tx.objectStore(META).put(v, "kv:" + k); await done(tx); },
     // Signing out: remove everything from this device

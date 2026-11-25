@@ -285,7 +285,7 @@ document.addEventListener("click", async ev => {
     }
     case "ac-del":
       if (S.confirmDel !== "account") { S.confirmDel = "account"; render(); return; }
-      try { if (S.connectors.strava) await stravaDisconnect(); await Sync.deleteAccount(); location.reload(); } catch (msg) { S.confirmDel = null; toast(String(msg)); render(); }
+      try { await Sync.recentLogin(); if (S.connectors.strava) await stravaDisconnect(); await Sync.deleteAccount(); location.reload(); } catch (msg) { S.confirmDel = null; toast(String(msg)); render(); }
       break;
   }
 });

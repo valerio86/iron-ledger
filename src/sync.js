@@ -33,7 +33,7 @@ async function start() {
   const fs = F.initializeFirestore(app, { localCache: F.persistentLocalCache({ tabManager: F.persistentMultipleTabManager() }) });
   const store = await LocalStore.open();
   const enc = p => encodeURIComponent(p);
-  let uid = null, unsub = null, live = false;
+  let uid = null, unsub = null, live = false, adopting = false;
 
   const col = () => F.collection(fs, "users", uid, "docs");
   async function push(path) {
@@ -62,11 +62,35 @@ async function start() {
       if (maxSat) await store.setKv("sat:" + uid, maxSat);
       // Once the server has answered (not just the offline cache), send what this device changed meanwhile
       if (!snap.metadata.fromCache && !live) {
+        // First sign-in here with data already on the device: this snapshot (since 0) is the whole account
+        if (adopting) { adopting = false; await adoptAccount(snap.docs.map(d => d.data())); }
         live = true;
         for (const m of store.pending()) await push(m.path);
         if (!store.pending().length) set({ status: "synced", msg: "" });
       }
     }, e => set({ status: "error", msg: friendly(e) }));
+  }
+
+  // The account wins over this device for docs both have; a starter template made here is dropped if the account is set up.
+  // Everything only on this device (a workout logged before signing in) still goes up.
+  async function adoptAccount(cloudDocs) {
+    const cloud = new Map(cloudDocs.filter(d => d.p).map(d => [d.p, d]));
+    if (!cloud.size) return;
+    const tpl = store.peek("settings/main")?.setup?.tpl, setUp = cloud.has("settings/main");
+    const starter = p => setUp && tpl && tpl !== "own" && new RegExp(`^routines/${tpl}-\\d+$`).test(p);
+    const rows = [];
+    for (const m of store.pending()) {
+      const c = cloud.get(m.path);
+      if (c) rows.push([m.path, c.del || c.d == null ? undefined : JSON.parse(c.d), { at: c.at, del: !!c.del, synced: true }]);
+      else if (starter(m.path)) rows.push([m.path, undefined, { at: 0, del: true, synced: true }]);
+    }
+    await store.adopt(rows);
+  }
+
+  // Firebase only deletes an account signed into in the last few minutes. Check before deleting anything
+  async function recentLogin() {
+    const { authTime } = await auth.currentUser.getIdTokenResult();
+    if (Date.now() - Date.parse(authTime) > 4 * 60e3) throw "For safety, Firebase needs a fresh sign-in first. Sign out, sign back in, and delete within a few minutes.";
   }
 
   A.onAuthStateChanged(auth, async user => {
@@ -75,6 +99,7 @@ async function start() {
     // Another account's data on this device: clear it first. Data logged before ever signing in is kept and uploaded.
     const owner = store.kv("owner");
     if (owner && owner !== user.uid) await store.wipe();
+    adopting = !owner && store.pending().length > 0;
     await store.setKv("owner", user.uid);
     uid = user.uid;
     set({ user: { email: user.email, name: user.displayName } });
@@ -92,16 +117,24 @@ async function start() {
     connectorKey: () => ({ apiKey: config.apiKey, projectId: config.projectId, uid, refreshToken: auth.currentUser.refreshToken }),
     // Signing out removes the log from this device; it stays in the account
     async signOut() { unsub?.(); unsub = null; live = false; await A.signOut(auth); await store.wipe(); },
+    recentLogin: () => auth.currentUser ? recentLogin() : Promise.resolve(),
     async deleteAccount() {
       const user = auth.currentUser; if (!user) return;
+      await recentLogin();
+      let cleared = false;
       try {
         unsub?.(); unsub = null; live = false;
         const docs = await F.getDocs(col());
         for (let i = 0; i < docs.docs.length; i += 400) {
-          const b = F.writeBatch(fs); docs.docs.slice(i, i + 400).forEach(d => b.delete(d.ref)); await b.commit();
+          const b = F.writeBatch(fs); docs.docs.slice(i, i + 400).forEach(d => b.delete(d.ref)); await b.commit(); cleared = true;
         }
         await A.deleteUser(user);
-      } catch (e) { if (auth.currentUser) startSync(); throw friendly(e); }
+      } catch (e) {
+        // The account is still there but some or all of its data is gone: send this device's copy back up
+        if (cleared) await store.unsyncAll();
+        if (auth.currentUser) startSync();
+        throw friendly(e);
+      }
       await store.wipe();
     },
   });

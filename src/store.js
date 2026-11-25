@@ -17,6 +17,32 @@ const LocalStore = (() => {
   const err = e => Object.assign(new Error(e?.message || "storage error"), { code: e?.name === "QuotaExceededError" ? "quota_exceeded" : "storage" });
   const colOf = p => p.split("/")[0];
   const idOf = p => p.slice(p.indexOf("/") + 1);
+  /* Field-level merge for docs that hold many unrelated settings: each top-level field carries when it last changed
+     (data._f = { field: ms }), so two devices changing different settings both keep their change. Other docs: newest doc wins. */
+  const MERGE = new Set(["settings/main"]);
+  // Equal regardless of key order (a merge rebuilds objects; comparing by order would bounce the same doc between devices forever)
+  const canon = v => Array.isArray(v) ? `[${v.map(canon).join(",")}]` : v && typeof v === "object"
+    ? `{${Object.keys(v).filter(k => v[k] !== undefined).sort().map(k => JSON.stringify(k) + ":" + canon(v[k])).join(",")}}` : JSON.stringify(v ?? null);
+  const same = (a, b) => canon(a) === canon(b);
+  const fields = (...ds) => { const s = new Set(); for (const d of ds) for (const k of Object.keys(d || {})) if (k !== "_f") s.add(k); return s; };
+  // A local write: stamp the fields that changed (including removed ones) with `at`
+  function stamp(prev, next, at) {
+    const f = { ...(prev?._f || {}) };
+    for (const k of fields(prev, next)) if (!same(prev?.[k], next[k])) f[k] = at;
+    const out = { ...next }; delete out._f; return { ...out, _f: f };
+  }
+  // A restore: every field it sets or removes counts as changed now
+  const stampAll = (prev, d, at) => { const out = { ...d }; delete out._f; return { ...out, _f: Object.fromEntries([...fields(prev, d)].map(k => [k, at])) }; };
+  // Each field from whichever side changed it last; unstamped fields count as 0, and a tie goes to the newer doc
+  function merge(a, aAt, b, bAt) {
+    const out = {}, f = {};
+    for (const k of fields(a, b)) {
+      const ta = a._f?.[k] ?? 0, tb = b._f?.[k] ?? 0, w = ta > tb || (ta === tb && aAt > bAt) ? a : b;
+      if (k in w) out[k] = w[k];
+      if (Math.max(ta, tb)) f[k] = Math.max(ta, tb);
+    }
+    return { ...out, _f: f };
+  }
   const snapDoc = (p) => ({ id: idOf(p), exists: mem.has(p), data: () => structuredClone(mem.get(p)) });
 
   let opening = null;
@@ -63,6 +89,7 @@ const LocalStore = (() => {
   }
 
   async function write(path, data) {
+    if (MERGE.has(path) && data !== undefined) data = stamp(mem.get(path), data, Date.now());
     await commit([[path, data, { at: Date.now(), del: data === undefined, synced: false }]]);
     notify(path);
     hooks.forEach(h => h(path));
@@ -86,7 +113,8 @@ const LocalStore = (() => {
     // Replace everything with a backup. Counts as a fresh change everywhere, so it also replaces the cloud copy.
     async restore(all) {
       const at = Date.now(), paths = new Set([...mem.keys(), ...Object.keys(all)]);
-      await commit([...paths].map(p => [p, all[p], { at, del: !(p in all), synced: false }]));
+      // A restore replaces: merged docs get every field stamped now, so the backup's values win the next merge too
+      await commit([...paths].map(p => [p, MERGE.has(p) && all[p] ? stampAll(mem.get(p), all[p], at) : all[p], { at, del: !(p in all), synced: false }]));
       for (const p of paths) notify(p);
       paths.forEach(p => hooks.forEach(h => h(p)));
     },
@@ -103,12 +131,22 @@ const LocalStore = (() => {
     },
     // A change from another device: applied only if newer than ours
     async applyRemote(list) {
-      const rows = list.filter(r => !(meta.get(r.path)?.at >= r.at)).map(r => [r.path, r.del ? undefined : r.data, { at: r.at, del: r.del, synced: true }]);
+      const mergeRows = [];
+      list = list.filter(r => {
+        const m = meta.get(r.path), mine = mem.get(r.path);
+        if (!MERGE.has(r.path) || r.del || !mine || !m || m.at === r.at || same(mine, r.data)) return true;
+        const out = merge(mine, m.at, r.data, r.at);
+        // The cloud's copy already has everything: take it as synced. Otherwise ours is newer in places: keep the merge and send it up
+        mergeRows.push(same(out, r.data) ? [r.path, r.data, { at: r.at, del: false, synced: true }] : [r.path, out, { at: Math.max(m.at, r.at) + 1, del: false, synced: false }]);
+        return false;
+      });
+      const rows = [...mergeRows, ...list.filter(r => !(meta.get(r.path)?.at >= r.at)).map(r => [r.path, r.del ? undefined : r.data, { at: r.at, del: r.del, synced: true }])];
       // Same version as ours: just note that the cloud has it
       for (const r of list) { const m = meta.get(r.path); if (m && m.at === r.at && !m.synced) rows.push([r.path, mem.get(r.path), { ...m, synced: true }]); }
       if (!rows.length) return 0;
       await commit(rows);
       rows.forEach(([p]) => notify(p));
+      mergeRows.filter(([, , m]) => !m.synced).forEach(([p]) => hooks.forEach(h => h(p)));   // push merges that the cloud lacks
       return rows.length;
     },
     // First sign-in on this device, into an account that already has data: the account's copy replaces this device's

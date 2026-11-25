@@ -1,0 +1,90 @@
+<!doctype html><meta charset="utf-8"><title>Iron Ledger sync tests</title>
+<!-- Real store.js + sync.js against a fake Firebase (fb/). One scenario per page load: ?s=adopt|fresh|del-old|del-fail|merge|restore -->
+<script src="../../src/store.js"></script><script>
+window.__FIREBASE_BASE = new URL("fb/", location.href).href;
+const out = [], ok = (c, name, msg = "") => out.push({ ok: !!c, name, msg: String(msg) });
+const tick = (ms = 50) => new Promise(r => setTimeout(r, ms));
+const cloudRow = (p, d, at) => [p, { p, d: d == null ? null : JSON.stringify(d), at, del: d == null, sat: { toMillis: () => 5e11 } }];
+async function scenario() {
+  await new Promise(r => { const q = indexedDB.deleteDatabase("iron-ledger"); q.onsuccess = q.onerror = r; });
+  const s = new URLSearchParams(location.search).get("s");
+  const db = await LocalStore.open();
+  const old = Date.now() - 864e5;
+  if (s === "adopt") {
+    // Fresh setup on this device, then "I have an account"
+    await db.doc("settings/main").set({ unit: "kg", setup: { done: "2026-11-25", tpl: "full3" } });
+    await db.doc("routines/full3-1").set({ name: "Starter A", items: [] });
+    await db.doc("body/2026-11-25").set({ weightLb: 150 });
+    await db.doc("sessions/2026-11-25").set({ date: "2026-11-25", entries: [{ ex: "goblet" }] });
+    window.__seed = [cloudRow("settings/main", { unit: "lb", equip: { have: ["dumbbells"] }, setup: { tpl: "full3" } }, old),
+      cloudRow("routines/mine", { name: "My routine", items: [] }, old), cloudRow("body/2026-11-25", { weightLb: 157 }, old),
+      cloudRow("sessions/2026-11-20", { date: "2026-11-20", entries: [] }, old)];
+  }
+  if (s === "fresh") {   // brand-new account: everything here goes up
+    await db.doc("settings/main").set({ unit: "kg", setup: { tpl: "full3" } });
+    await db.doc("routines/full3-1").set({ name: "Starter A", items: [] });
+    window.__seed = [];
+  }
+  if (s === "del-old" || s === "del-fail") window.__seed = [cloudRow("sessions/2026-11-20", { date: "2026-11-20", entries: [1] }, old), cloudRow("settings/main", { unit: "lb" }, old)];
+  if (s === "merge" || s === "restore") {
+    // This device has signed in before. Settings in sync with the cloud, then: this device changes its gear offline,
+    // while another device dismissed a tip (a later save of the same doc)
+    await db.setKv("owner", "u1");
+    await db.doc("settings/main").set({ unit: "lb", equip: { have: ["dumbbells"] }, tipsSeen: [] });
+    const base = db.peek("settings/main"), at0 = db.pending()[0].at;
+    await db.markSynced("settings/main", at0);
+    await tick(5);
+    await db.doc("settings/main").set({ ...base, equip: { have: ["dumbbells", "bands"] } });
+    const t2 = Date.now() + 1000;
+    window.__seed = [cloudRow("settings/main", { ...base, tipsSeen: ["plan"], _f: { ...base._f, tipsSeen: t2 } }, t2)];
+  }
+  await import("../../src/sync.js"); await tick(100);
+  for (const [k, v] of window.__seed) __cloud.set(k, v);
+  const cloudData = p => { const d = __cloud.get(p); return d && d.d != null ? JSON.parse(d.d) : d ? "DELETED" : undefined; };
+  const authTime = s === "del-old" ? new Date(Date.now() - 36e5).toUTCString() : new Date().toUTCString();
+  await __auth({ uid: "u1", email: "x", getIdTokenResult: async () => ({ authTime }) }); await tick();
+  __fire(true); await tick(); __fire(false); await tick(200);
+  const local = p => db.peek(p);
+  if (s === "adopt") {
+    ok(local("settings/main")?.unit === "lb" && local("settings/main")?.equip, "account settings kept on device", JSON.stringify(local("settings/main")));
+    ok(cloudData("settings/main")?.unit === "lb", "account settings not overwritten", JSON.stringify(cloudData("settings/main")));
+    ok(local("routines/full3-1") === undefined && !__cloud.has("routines/full3-1"), "starter routine dropped, not uploaded");
+    ok(local("routines/mine")?.name === "My routine", "account routine arrived");
+    ok(cloudData("body/2026-11-25")?.weightLb === 157 && local("body/2026-11-25")?.weightLb === 157, "doc in both: account wins");
+    ok(cloudData("sessions/2026-11-25")?.entries?.length === 1, "workout logged before signing in uploaded");
+    ok(db.pending().length === 0, "nothing left pending", JSON.stringify(db.pending()));
+  }
+  if (s === "merge") {
+    const L = local("settings/main"), C = cloudData("settings/main");
+    ok(L.equip.have.includes("bands") && L.tipsSeen.includes("plan"), "device keeps both changes", JSON.stringify(L));
+    ok(C.equip.have.includes("bands") && C.tipsSeen.includes("plan"), "cloud gets both changes", JSON.stringify(C));
+    const w = __writes; __fire(false); await tick(200); __fire(false); await tick(200);
+    ok(__writes === w && db.pending().length === 0, "settles: no more writes once merged", `${__writes - w} writes, ${db.pending().length} pending`);
+  }
+  if (s === "restore") {
+    await db.restore({ "settings/main": { unit: "kg" } }); await tick(300);
+    __fire(false); await tick(200);
+    const L = local("settings/main"), C = cloudData("settings/main");
+    ok(L.unit === "kg" && !L.equip && !L.tipsSeen?.length, "restore replaces settings on the device", JSON.stringify(L));
+    ok(C.unit === "kg" && !C.equip && !C.tipsSeen?.length, "and in the account", JSON.stringify(C));
+  }
+  if (s === "fresh") {
+    ok(cloudData("settings/main")?.unit === "kg", "new account gets this device's settings");
+    ok(cloudData("routines/full3-1")?.name === "Starter A", "new account gets the starter routine");
+  }
+  if (s === "del-old") {
+    let err = null; try { await Sync.deleteAccount(); } catch (e) { err = e; }
+    ok(String(err).includes("fresh sign-in"), "stale sign-in refused", err);
+    ok(cloudData("sessions/2026-11-20")?.entries?.length === 1 && !window.__deleted, "nothing deleted");
+  }
+  if (s === "del-fail") {
+    window.__deleteFails = true;
+    let err = null; try { await Sync.deleteAccount(); } catch (e) { err = e; }
+    ok(err, "error reported", err);
+    ok(db.pending().length >= 2, "device copy queued to go back up", db.pending().length);
+    await tick(); __fire(false); await tick(300);
+    ok(cloudData("sessions/2026-11-20")?.entries?.length === 1 && cloudData("settings/main")?.unit === "lb", "account data restored from device", JSON.stringify([...__cloud.keys()]));
+  }
+}
+scenario().catch(e => ok(false, "crashed", e.stack || e)).finally(() => fetch("/results", { method: "POST", body: JSON.stringify(out) }));
+</script>

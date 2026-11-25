@@ -1,0 +1,39 @@
+<!doctype html><meta charset="utf-8"><title>Iron Ledger worker tests</title>
+<!-- worker/strava-worker.js token checks, with Google's key endpoint faked and tokens signed by a key made here -->
+<script type="module">
+const out = [], ok = (c, name, msg = "") => out.push({ ok: !!c, name, msg: String(msg) });
+const b64u = b => btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+const enc = o => b64u(new TextEncoder().encode(JSON.stringify(o)));
+let jwksMode = "ok", jwksCalls = 0, pub;
+const realFetch = fetch;
+window.fetch = async (url, opts) => {
+  if (String(url).includes("jwk/securetoken")) { jwksCalls++;
+    return jwksMode === "fail" ? new Response("oops", { status: 500 }) : jwksMode === "nokeys" ? new Response('{"error":1}', { status: 200 })
+      : new Response(JSON.stringify({ keys: [{ ...pub, kid: "k1", alg: "RS256", use: "sig" }] }), { headers: { "Cache-Control": "max-age=3600" } }); }
+  return realFetch(url, opts);
+};
+try {
+  const kp = await crypto.subtle.generateKey({ name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" }, true, ["sign", "verify"]);
+  pub = await crypto.subtle.exportKey("jwk", kp.publicKey);
+  const now = Math.floor(Date.now() / 1000);
+  const token = async (kid = "k1") => { const h = enc({ alg: "RS256", kid }), p = enc({ aud: "proj", iss: "https://securetoken.google.com/proj", exp: now + 3600, iat: now - 10, sub: "u1" });
+    return `${h}.${p}.${b64u(await crypto.subtle.sign("RSASSA-PKCS1-v1_5", kp.privateKey, new TextEncoder().encode(`${h}.${p}`)))}`; };
+  const { default: W } = await import("../worker/strava-worker.js");
+  const env = { ALLOWED_ORIGINS: "https://app", FIREBASE_PROJECT_ID: "proj", TOKENS: { get: async () => null } };
+  const req = (url, t, method = "GET", body = "") => ({ url, method, headers: new Headers({ Origin: "https://app", Authorization: "Bearer " + t }), json: async () => JSON.parse(body) });
+  const call = async t => { const r = await W.fetch(req("https://w/strava/activities", t), env); return [r.status, await r.json()]; };
+  jwksMode = "fail"; let [st, j] = await call(await token());
+  ok(st === 401 && !("detail" in j), "key fetch failing → 401 without details", JSON.stringify([st, j]));
+  jwksMode = "nokeys"; [st] = await call(await token()); ok(st === 401, "key response without keys → 401", st);
+  jwksMode = "ok"; [st, j] = await call(await token());
+  ok(st === 404 && j.error === "not_connected", "next request recovers (failure wasn't cached)", JSON.stringify([st, j]));
+  const before = jwksCalls; [st] = await call(await token()); ok(st === 404 && jwksCalls === before, "valid key served from cache", jwksCalls - before);
+  const b2 = jwksCalls; for (let i = 0; i < 5; i++) { [st] = await call(await token("nope")); ok(st === 401, "unknown key → 401"); }
+  ok(jwksCalls - b2 <= 1, "unknown keys refetch at most once a minute", jwksCalls - b2);
+  const tampered = (await token()).replace(/\.[^.]+\./, "." + enc({ aud: "proj", iss: "https://securetoken.google.com/proj", exp: now + 3600, iat: now, sub: "attacker" }) + ".");
+  [st] = await call(tampered); ok(st === 401, "tampered claims → 401", st);
+  const r = await W.fetch(req("https://w/strava/zone2", await token(), "POST", "{bad"), { ...env, TOKENS: { get: async () => JSON.stringify({ access_token: "a", expires_at: now + 9999 }) } });
+  const rj = await r.json(); ok(r.status === 500 && !("detail" in rj), "server error has no details", JSON.stringify(rj));
+} catch (e) { ok(false, "crashed", e.stack); }
+realFetch("/results", { method: "POST", body: JSON.stringify(out) });
+</script>

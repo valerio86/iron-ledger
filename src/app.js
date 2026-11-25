@@ -669,7 +669,6 @@ const S = {
   cardio: [], health: {},                       // from Strava / Garmin (via Drive)
   conn: { strava: { st: "off" }, garmin: { st: "off" } },
 };
-const STRAVA = "Strava", DRIVE = "Google Drive", HEALTH_FILE = "iron-ledger-health.json";
 let DB = null;
 const LB_PER_KG = 2.20462;
 
@@ -737,82 +736,9 @@ async function boot() {
   db.collection("body").onSnapshot(snap => { S.body = {}; snap.docs.forEach(d => S.body[d.id] = structuredClone(d.data())); rebuildDerived(); ready(); }, onDbErr);
   db.doc("settings/main").onSnapshot(d => { if (d.exists) S.settings = { unit: "lb", ...d.data() }; ready(); }, onDbErr);
 }
-/* ============================== Connectors (Strava, Garmin via Drive) ============================== */
-let MCP = null;
-const CONN_FIX = {
-  needs_reauth: s => `Reconnect ${s} in claude.ai Settings → Connectors.`,
-  server_not_connected: s => `Add the ${s} connector in claude.ai Settings → Connectors.`,
-  selection_required: s => `Pick which ${s} connector to use when claude.ai asks.`,
-  not_in_manifest: s => `${s} is turned off for this page. Turn it on from the page's Permissions menu.`,
-  blocked_by_policy: s => `Your organization blocks ${s} here.`,
-};
-function connError(key, server, e) {
-  const fix = CONN_FIX[e?.code];
-  const transient = !fix && (e?.retryable || e?.code === "server_unavailable");
-  S.conn[key] = { ...S.conn[key], st: fix ? "blocked" : "error", msg: fix ? fix(server) : transient ? `${server} didn't answer. It will try again shortly.` : `${server}: ${e?.message || "request failed"}` };
-  if (fix) { if (key === "strava") S.extCardio = []; else S.extHealth = {}; rebuildDerived(); }
-  render();
-}
-async function startConnectors() {
-  MCP = null;   // Strava comes back via its own OAuth; Garmin has no public API for individual apps
-  if (!MCP) { S.conn.strava = { st: "soon", msg: "Coming soon." }; applyConnectors(); return; }
-  // Strava: last 6 weeks of activities, refreshed every 30 min
-  S.conn.strava = { st: "loading" };
-  const since = new Date(Date.now() - 42 * 864e5);
-  MCP.watchTool(STRAVA, "list_activities", { first: 100, range_start: dayKey(since) + "T00:00:00" }, ev => {
-    if (ev.type === "error") return connError("strava", STRAVA, ev.error);
-    const acts = ev.result.payload?.activities || [];
-    S.extCardio = acts.map(a => {
-      const d = new Date(a.start_local), re = a.summary?.relative_effort || 0;
-      return { id: a.id, name: a.name, sport: a.sport_type, day: dayKey(d), t: d.getTime() + (a.summary?.elapsed_time || 0) * 1000,
-        mins: Math.round((a.summary?.moving_time || 0) / 60), km: (a.summary?.distance || 0) / 1000, re, muscles: CARDIO[a.sport_type] || {} };
-    });
-    S.conn.strava = { st: "ok", at: ev.result.cache?.storedAt || Date.now(), n: S.extCardio.length };
-    rebuildDerived();
-    render();
-  }, { refetchInterval: 30 * 60e3, cache: { staleTime: 5 * 60e3 } });
-  loadHealth();
-}
-function findFileId(p) {  // search_files payload: first object carrying an id whose title/name is our file
-  let hit = null;
-  (function walk(o) { if (!o || hit) return; if (Array.isArray(o)) return o.forEach(walk);
-    if (typeof o === "object") { const nm = o.title || o.name; if (o.id && (!nm || String(nm).includes("iron-ledger-health"))) { hit = o.id; return; } Object.values(o).forEach(walk); } })(p);
-  return hit;
-}
-function findJson(p) {  // download payload: some string field holds the file, base64 or plain
-  let out = null;
-  (function walk(o) { if (out || o == null) return;
-    if (typeof o === "string") { for (const s of [o, (() => { try { return new TextDecoder().decode(Uint8Array.from(atob(o.replace(/\s/g, "")), c => c.charCodeAt(0))); } catch { return ""; } })()]) {
-        if (s.trim().startsWith("{")) { try { const j = JSON.parse(s); if (j.days) { out = j; return; } } catch {} } } return; }
-    if (typeof o === "object") { if (o.days && o.source === "garmin") { out = o; return; } Object.values(o).forEach(walk); } })(p);
-  return out;
-}
-let healthUnsub = null;
-async function loadHealth() {
-  S.conn.garmin = { st: "loading" };
-  let id = null;
-  try { id = localStorage.getItem("il-health-file"); } catch {}
-  if (!id) {
-    try {
-      const r = await MCP.callTool(DRIVE, "search_files", { query: `title = '${HEALTH_FILE}'`, pageSize: 5, excludeContentSnippets: true }, { cache: { staleTime: 60e3 } });
-      id = findFileId(r.payload);
-    } catch (e) { return connError("garmin", DRIVE, e); }
-    if (!id) { S.conn.garmin = { st: "missing", msg: `No ${HEALTH_FILE} in your Google Drive yet. The Garmin sync on your Mac creates it.` }; render(); return; }
-    try { localStorage.setItem("il-health-file", id); } catch {}
-  }
-  healthUnsub?.();
-  healthUnsub = MCP.watchTool(DRIVE, "download_file_content", { fileId: id }, ev => {
-    if (ev.type === "error") {
-      if (ev.error?.code === "tool_error") { try { localStorage.removeItem("il-health-file"); } catch {} }
-      return connError("garmin", DRIVE, ev.error);
-    }
-    const j = findJson(ev.result.payload);
-    if (!j) { S.conn.garmin = { st: "error", msg: "Found the Garmin file but couldn't read it." }; render(); return; }
-    S.extHealth = j.days || {}; rebuildDerived();
-    S.conn.garmin = { st: "ok", at: Date.parse(j.updated) || ev.result.cache?.storedAt || Date.now(), n: Object.keys(S.extHealth).length };
-    render();
-  }, { refetchInterval: 60 * 60e3, cache: { staleTime: 10 * 60e3 } });
-}
+/* ============================== Connectors ============================== */
+// Strava (setup.js, through the worker) and script connectors like Garmin arrive as connectors/* docs; applyConnectors reads them
+function startConnectors() { applyConnectors(); }
 const CARDIO_SPORTS_EXCL = new Set(["Walk"]);   // walks are daily life, not training cardio: only their Zone 2 minutes (a.z2) count
 // Training minutes of one activity: a walk's time in Zone 2, anything else in full. A walk with 15+ of them is a Zone 2 session
 function cardioMins(a) { return CARDIO_SPORTS_EXCL.has(a.sport) ? a.z2 || 0 : a.mins; }
@@ -3277,7 +3203,6 @@ function renderSettings() {
           const pill = c.st === "ok" ? `<span class="pill good">${c.n} ${k === "strava" ? "activities" : "days"}</span>` : c.st === "loading" ? `<span class="pill neutral">Loading</span>` : c.st === "off" ? `<span class="pill neutral">Not started</span>` : c.st === "soon" ? `<span class="pill neutral">Later</span>` : `<span class="pill ${c.st === "missing" ? "warn" : "bad"}">${c.st === "missing" ? "Waiting" : "Not connected"}</span>`;
           return `<div class="row"><div class="l"><b>${n}</b><div class="small muted">${c.msg ? esc(c.msg) : d}</div></div>${pill}</div>`; }).join("")}
       </div>
-      ${S.conn.garmin.st !== "ok" && MCP ? `<div class="actions" style="margin-top:0"><button class="btn" data-act="retryhealth">Look for the Garmin file again</button></div>` : ""}
       ${renderStravaActions()}
       ${renderConnectorKey()}
     </section>`;
@@ -3840,7 +3765,6 @@ document.addEventListener("click", async ev => {
       if (act === "fuelack") toast(`Daily target is now ~${next.kcal.toLocaleString()} kcal`);
       break;
     }
-    case "retryhealth": try { localStorage.removeItem("il-health-file"); } catch {} loadHealth(); render(); break;
     case "goto": S.day = b.dataset.day; S.tab = "today"; render(); window.scrollTo(0, 0); break;
     case "editroutine": editRoutine(b.dataset.id); break;
     case "routinefromday": routineFromDay(); break;
@@ -3976,6 +3900,23 @@ function backupDocs(j) {
   }
   return null;
 }
+// A backup is checked before anything is replaced: the shapes the app relies on when it reads them. null = fine
+function backupProblem(docs) {
+  const obj = v => v && typeof v === "object" && !Array.isArray(v);
+  if (!obj(docs)) return "it has no data";
+  for (const [k, v] of Object.entries(docs)) {
+    const [col, id, extra] = k.split("/");
+    if (extra !== undefined || !id || !["sessions", "exercises", "routines", "settings", "body", "connectors"].includes(col)) return `unexpected entry "${k}"`;
+    if (!obj(v)) return `${k} is empty or malformed`;
+    if ((col === "sessions" || col === "body") && !/^\d{4}-\d{2}-\d{2}$/.test(id)) return `${k} isn't a date`;
+    if (col === "sessions" && !(Array.isArray(v.entries) && v.entries.every(e => obj(e) && typeof e.ex === "string" && Array.isArray(e.sets) && e.sets.every(obj))))
+      return `the session on ${id} is malformed`;
+    if (col === "routines" && !(typeof v.name === "string" && Array.isArray(v.items) && v.items.every(it => obj(it) && typeof it.ex === "string")))
+      return `routine "${id}" is malformed`;
+    if (col === "exercises" && !(typeof v.name === "string" && obj(v.muscles))) return `exercise "${id}" is malformed`;
+  }
+  return null;
+}
 // Height: 5'10, 5' 10", 5 10 or 70 (inches) in lb mode, centimetres in kg mode. Stored in inches; blank clears it
 function fmtHeight(inches) { if (!inches) return ""; if (unit() === "kg") return String(Math.round(inches * 2.54)); const r = Math.round(inches); return `${Math.floor(r / 12)}'${r % 12}`; }
 function parseHeight(v, u = unit()) {
@@ -4009,6 +3950,8 @@ document.addEventListener("change", async ev => {
   let docs = null;
   try { docs = backupDocs(JSON.parse(await f.text())); } catch {}
   if (!docs) { toast("That file isn't an Iron Ledger backup."); return; }
+  const bad = backupProblem(docs);
+  if (bad) { toast(`Can't restore that backup: ${bad}. Nothing was changed.`); return; }
   const n = Object.keys(docs).filter(k => k.startsWith("sessions/")).length;
   // Strava and Garmin connections aren't part of a backup's history: keep them
   for (const [k, v] of Object.entries(DB.dump())) if (k.startsWith("connectors/") && !(k in docs)) docs[k] = v;

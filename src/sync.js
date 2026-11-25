@@ -23,10 +23,11 @@ const friendly = e => AUTH_MSG[e?.code] || e?.message || "Something went wrong."
 if (config) start().catch(e => set({ status: "error", msg: friendly(e) }));
 
 async function start() {
+  const base = window.__FIREBASE_BASE || `https://www.gstatic.com/firebasejs/${V}/`;   // tests/sync points this at a fake Firebase
   const [{ initializeApp }, A, F] = await Promise.all([
-    import(`https://www.gstatic.com/firebasejs/${V}/firebase-app.js`),
-    import(`https://www.gstatic.com/firebasejs/${V}/firebase-auth.js`),
-    import(`https://www.gstatic.com/firebasejs/${V}/firebase-firestore.js`),
+    import(`${base}firebase-app.js`),
+    import(`${base}firebase-auth.js`),
+    import(`${base}firebase-firestore.js`),
   ]);
   const app = initializeApp(config);
   const auth = A.getAuth(app);

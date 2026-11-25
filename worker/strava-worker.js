@@ -16,7 +16,7 @@
      TOKENS                KV namespace binding */
 
 const JWKS_URL = "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com";
-let jwksCache = { keys: null, until: 0 };
+let jwksCache = { keys: [], until: 0, at: 0 };
 
 export default {
   async fetch(req, env) {
@@ -32,7 +32,7 @@ export default {
 
     let uid;
     try { uid = await verifyFirebase(req.headers.get("Authorization")?.replace(/^Bearer /, ""), env.FIREBASE_PROJECT_ID); }
-    catch (e) { return json({ error: "unauthenticated", detail: e.message }, 401); }
+    catch (e) { console.warn("auth:", e.message); return json({ error: "unauthenticated" }, 401); }
 
     const url = new URL(req.url);
     try {
@@ -85,7 +85,8 @@ export default {
       }
       return json({ error: "not_found" }, 404);
     } catch (e) {
-      return json({ error: "server_error", detail: e.message }, 500);
+      console.error(url.pathname, e.message);   // details stay in the worker's logs, not in the browser
+      return json({ error: "server_error" }, 500);
     }
   },
 };
@@ -132,12 +133,16 @@ async function verifyFirebase(token, project) {
   if (header.alg !== "RS256") throw new Error("alg");
   if (claims.aud !== project || claims.iss !== `https://securetoken.google.com/${project}`) throw new Error("audience");
   if (!(claims.exp > now) || !(claims.iat < now + 60) || !claims.sub) throw new Error("expired");
-  if (jwksCache.until < Date.now()) {
-    const r = await fetch(JWKS_URL);
+  // Google's signing keys: cached for as long as Google says, refetched early if a token names a key we don't have (rotation).
+  // A failed fetch is never cached, so one bad response can't lock everyone out until the cache expires
+  let jwk = jwksCache.until > Date.now() && jwksCache.keys.find(k => k.kid === header.kid);
+  if (!jwk && !(jwksCache.until > Date.now() && Date.now() - jwksCache.at < 60e3)) {   // unknown key in a fresh cache: at most one refetch a minute
+    const r = await fetch(JWKS_URL), body = r.ok ? await r.json().catch(() => null) : null;
+    if (!Array.isArray(body?.keys)) throw new Error(`keys fetch ${r.status}`);
     const maxAge = +(/max-age=(\d+)/.exec(r.headers.get("Cache-Control") || "")?.[1] || 3600);
-    jwksCache = { keys: (await r.json()).keys, until: Date.now() + maxAge * 1000 };
+    jwksCache = { keys: body.keys, until: Date.now() + maxAge * 1000, at: Date.now() };
+    jwk = body.keys.find(k => k.kid === header.kid);
   }
-  const jwk = jwksCache.keys.find(k => k.kid === header.kid);
   if (!jwk) throw new Error("unknown key");
   const key = await crypto.subtle.importKey("jwk", jwk, { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["verify"]);
   const ok = await crypto.subtle.verify("RSASSA-PKCS1-v1_5", key, b64url(sig), new TextEncoder().encode(`${h}.${p}`));

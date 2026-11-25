@@ -743,6 +743,20 @@ function run() {
   });
   test("tape: cm in kg mode, stored as inches", () => scene({ settings: { unit: "kg" } }, () => { eq(fromTape("81.3"), 32.01); eq(toTape(32), 81.3); eq(tapeUnit(), "cm"); }));
 
+  // Backups are checked before restore replaces anything
+  const goodBackup = { "settings/main": { unit: "lb" }, ...Object.fromEntries(Object.entries(session(ago(1), entry("goblet", 30, 8))).map(([k, v]) => ["sessions/" + k, v])),
+    "routines/a": { name: "A", items: [{ ex: "goblet", sets: 3, r: 8 }] }, "exercises/x": { name: "X", muscles: { quads: 1 } }, ["body/" + today]: { weightLb: 150 } };
+  test("backup: a normal backup passes", () => eq(backupProblem(goodBackup), null));
+  test("backup: the old artifact format converts and passes", () => eq(backupProblem(backupDocs({ sessions: { [today]: { date: today, entries: [] } }, routines: {}, settings: { unit: "lb" } })), null));
+  test("backup: malformed files are refused with a reason", () => {
+    ok(backupProblem({ ...goodBackup, ["sessions/" + today]: { entries: "nope" } })?.includes("malformed"), "entries not a list");
+    ok(backupProblem({ ...goodBackup, ["sessions/" + today]: { entries: [{ ex: "goblet", sets: [5] }] } })?.includes("malformed"), "set not an object");
+    ok(backupProblem({ ...goodBackup, "sessions/yesterday": { entries: [] } })?.includes("date"), "bad date");
+    ok(backupProblem({ ...goodBackup, "users/x": {} })?.includes("unexpected"), "unknown collection");
+    ok(backupProblem({ ...goodBackup, "routines/a": { name: "A" } })?.includes("routine"), "routine without items");
+    ok(backupProblem({ ...goodBackup, "settings/main": null })?.includes("malformed"), "null doc");
+  });
+
   const failed = results.filter(r => !r.ok);
   document.title = failed.length ? `${failed.length} FAILED` : "all passed";
   document.getElementById("view").innerHTML = `<pre>${esc(results.map(r => `${r.ok ? "ok  " : "FAIL"} ${r.name}${r.msg ? `\n     ${r.msg}` : ""}`).join("\n"))}\n\n${results.length - failed.length} of ${results.length} passed</pre>`;
